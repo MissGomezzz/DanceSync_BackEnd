@@ -1,8 +1,8 @@
 import type { Battle } from "./Battle.js";
 import type { Player } from "./Player.js";
 
-/** Maximum number of participants per room: 2 dancers + 6 spectators. */
-export const MAX_PLAYERS = 8;
+/** Maximum number of participants per room: 2 dancers + 5 spectators. */
+export const MAX_PLAYERS = 7;
 export const DANCERS_PER_BATTLE = 2;
 
 export type RoomStatus = "waiting" | "battling" | "finished";
