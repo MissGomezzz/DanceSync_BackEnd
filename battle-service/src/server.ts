@@ -31,7 +31,13 @@ const io: BattleServer = new Server(httpServer, {
   path: "/socket.io",
   cors: { origin: env.corsOrigin, credentials: true },
 });
-registerSocketHandlers(io, { joinRoom, startBattle, sendChatMessage, rateDancer });
+registerSocketHandlers(io, {
+  joinRoom,
+  startBattle,
+  sendChatMessage,
+  rateDancer,
+  disconnectGraceMs: env.disconnectGraceMs,
+});
 
 httpServer.listen(env.port, () => {
   console.log(`battle-service listening on http://localhost:${env.port} (CORS origin: ${env.corsOrigin})`);

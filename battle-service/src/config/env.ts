@@ -14,6 +14,11 @@ export const env = {
   port: readNumber("PORT", 3000),
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
   usersServiceUrl: process.env.USERS_SERVICE_URL ?? "http://localhost:8081",
+  /**
+   * How long a disconnected player keeps their seat before being removed.
+   * Covers page refreshes and transient network drops without closing the room.
+   */
+  disconnectGraceMs: readNumber("DISCONNECT_GRACE_MS", 15_000),
 } as const;
 
 export type Env = typeof env;

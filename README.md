@@ -148,12 +148,18 @@ Socket.IO (path `/socket.io`):
 | client -> server | `battle:start` | `{ roomCode, requesterId, dancerIds? }` (host only) |
 | client -> server | `chat:message` | `{ roomCode, senderId, content }` |
 | client -> server | `rating:submit` | `{ roomCode, raterId, dancerId, score }` (spectators, 1-5) |
+| client -> server | `webrtc:ready` | `{ roomCode, playerId }` - the sender is ready to (re)negotiate its camera connections |
+| client -> server | `webrtc:signal` | `{ roomCode, from, to, negotiationId, description?, candidate? }` - SDP offer/answer or ICE candidate |
 | server -> client | `room:updated` | `Room` |
 | server -> client | `battle:started` | `Room` |
 | server -> client | `chat:message` | `ChatMessage` |
 | server -> client | `battle:finished` | `Room` (includes `battle.result`) |
+| server -> client | `webrtc:peer-ready` | `{ playerId }` - broadcast to the rest of the room after `webrtc:ready` |
+| server -> client | `webrtc:signal` | same payload as the client event, delivered only to the `to` player |
 
 Rooms hold at most 8 players. When the host starts the battle, two players become dancers and the rest spectate; the battle finishes automatically once every spectator has rated both dancers.
+
+The `webrtc:*` events are a thin signaling relay for the dancers' live cameras (media flows peer to peer, never through the server). The server only checks that the sender joined that room as `playerId`/`from` and that `to` is connected to the same room; otherwise the ack returns `{ ok: false }` and nothing is relayed. Each socket also joins a `player:<playerId>` channel on `room:join` so signals can target a single player.
 
 ## Roadmap
 
