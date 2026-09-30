@@ -3,6 +3,7 @@ import type { JoinRoom } from "../../application/usecases/JoinRoom.js";
 import type { RateDancer } from "../../application/usecases/RateDancer.js";
 import type { SendChatMessage } from "../../application/usecases/SendChatMessage.js";
 import type { StartBattle } from "../../application/usecases/StartBattle.js";
+import type { SelectRole } from "../../application/usecases/SelectRole.js";
 import { DomainError } from "../../domain/errors/DomainError.js";
 import {
   ClientEvents,
@@ -22,6 +23,7 @@ export interface SocketDependencies {
   startBattle: StartBattle;
   sendChatMessage: SendChatMessage;
   rateDancer: RateDancer;
+  selectRole: SelectRole;
   /** Seat retention after a disconnect, see env.disconnectGraceMs. */
   disconnectGraceMs: number;
 }
@@ -33,8 +35,16 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const room = await deps.joinRoom.execute(payload);
         socket.data.playerId = payload.playerId;
         socket.data.roomCode = room.code;
-        // The per-player channel lets WebRTC signaling target one player's sockets.
-        await socket.join([room.code, playerChannel(payload.playerId)]);
+        await socket.join(room.code);
+        await socket.join(playerChannel(payload.playerId));
+        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+        return room;
+      }),
+    );
+
+    socket.on(ClientEvents.ROLE_SELECT, (payload, ack) =>
+      guard(socket, ack, async () => {
+        const room = await deps.selectRole.execute(payload);
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
         return room;
       }),

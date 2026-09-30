@@ -1,9 +1,9 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { DomainError } from "../errors/DomainError.js";
 import type { Battle, BattleResult } from "../model/Battle.js";
-import type { Player } from "../model/Player.js";
+import type { Player, PlayerRole } from "../model/Player.js";
 import { MAX_SCORE, MIN_SCORE, type Rating } from "../model/Rating.js";
-import { DANCERS_PER_BATTLE, MAX_PLAYERS, type Room } from "../model/Room.js";
+import { MAX_PLAYERS, MIN_DANCERS_PER_BATTLE, type Room } from "../model/Room.js";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_LENGTH = 6;
@@ -17,19 +17,15 @@ export function generateRoomCode(): string {
   return code;
 }
 
-/**
- * Pure room rules. Every function returns a new Room and never mutates its input,
- * so use cases stay trivially testable and persistence remains an adapter concern.
- */
 export const RoomService = {
   create(host: Omit<Player, "role">, code: string = generateRoomCode()): Room {
-    const hostPlayer: Player = { ...host, role: "spectator" };
+    const hostPlayer: Player = { ...host, role: "undecided" };
     return {
       code,
       hostId: host.id,
       players: [hostPlayer],
       dancers: null,
-      spectators: [hostPlayer],
+      spectators: [],
       status: "waiting",
       battle: null,
       createdAt: new Date(),
@@ -46,11 +42,23 @@ export const RoomService = {
     if (room.players.length >= MAX_PLAYERS) {
       throw new DomainError("ROOM_FULL", `Room ${room.code} already has ${MAX_PLAYERS} players`);
     }
-    const joined: Player = { ...player, role: "spectator" };
+    const joined: Player = { ...player, role: "undecided" };
+    return { ...room, players: [...room.players, joined] };
+  },
+
+  /** Sets a player's chosen role while the room is still in the lobby. */
+  selectRole(room: Room, playerId: string, role: Exclude<PlayerRole, "undecided">): Room {
+    if (room.status !== "waiting") {
+      throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} is not accepting role changes`);
+    }
+    if (!room.players.some((p) => p.id === playerId)) {
+      throw new DomainError("PLAYER_NOT_IN_ROOM", `Player ${playerId} is not in room ${room.code}`);
+    }
+    const players = room.players.map((p) => (p.id === playerId ? { ...p, role } : p));
     return {
       ...room,
-      players: [...room.players, joined],
-      spectators: [...room.spectators, joined],
+      players,
+      spectators: players.filter((p) => p.role === "spectator"),
     };
   },
 
@@ -66,40 +74,43 @@ export const RoomService = {
       dancers,
       spectators: players.filter((p) => !dancers || !dancers.some((d) => d.id === p.id)),
       hostId: room.hostId === playerId ? (players[0]?.id ?? room.hostId) : room.hostId,
-      // A battle cannot continue without both dancers.
       status: room.status === "battling" && dancers === null ? "finished" : room.status,
     };
   },
 
   /**
-   * Starts a battle. When dancer ids are omitted the first two players who joined
-   * become dancers; everyone else spectates.
+   * Starts a battle using whoever currently has role "dancer" (chosen via
+   * selectRole), unless explicit dancerIds are given. Anyone still
+   * "undecided" at this point becomes a spectator by default.
    */
-  startBattle(room: Room, dancerIds?: [string, string]): Room {
+  startBattle(room: Room, dancerIds?: string[]): Room {
     if (room.status !== "waiting") {
       throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} already started`);
     }
-    if (room.players.length < DANCERS_PER_BATTLE) {
-      throw new DomainError("NOT_ENOUGH_PLAYERS", `Room ${room.code} needs ${DANCERS_PER_BATTLE} players to start`);
+    const selectedIds = dancerIds ?? room.players.filter((p) => p.role === "dancer").map((p) => p.id);
+    if (new Set(selectedIds).size !== selectedIds.length) {
+      throw new DomainError("INVALID_DANCER", "Dancer ids must be unique");
     }
-    const selectedIds = dancerIds ?? [room.players[0]!.id, room.players[1]!.id];
-    if (selectedIds[0] === selectedIds[1]) {
-      throw new DomainError("INVALID_DANCER", "Both dancers must be different players");
+    if (selectedIds.length < MIN_DANCERS_PER_BATTLE) {
+      throw new DomainError(
+        "NOT_ENOUGH_DANCERS",
+        `At least ${MIN_DANCERS_PER_BATTLE} dancers are required to start`,
+      );
     }
     const selected = selectedIds.map((id) => room.players.find((p) => p.id === id));
     if (selected.some((p) => p === undefined)) {
       throw new DomainError("INVALID_DANCER", "Selected dancers must be players in the room");
     }
 
-    const dancers = selected.map((p) => ({ ...p!, role: "dancer" as const })) as [Player, Player];
+    const dancers = selected.map((p) => ({ ...p!, role: "dancer" as const }));
     const players = room.players.map((p) => {
-      const dancer = dancers.find((d) => d.id === p.id);
-      return dancer ?? { ...p, role: "spectator" as const };
+      const isDancer = dancers.some((d) => d.id === p.id);
+      return isDancer ? { ...p, role: "dancer" as const } : { ...p, role: "spectator" as const };
     });
     const battle: Battle = {
       id: randomUUID(),
       roomCode: room.code,
-      dancerIds: [dancers[0].id, dancers[1].id],
+      dancerIds: dancers.map((d) => d.id),
       ratings: [],
       startedAt: new Date(),
       finishedAt: null,
@@ -140,13 +151,17 @@ export const RoomService = {
     };
   },
 
-  /** True once every spectator has rated both dancers. */
   allRatingsSubmitted(room: Room): boolean {
     if (!room.battle) return false;
-    const expected = room.spectators.length * DANCERS_PER_BATTLE;
+    const expected = room.spectators.length * room.battle.dancerIds.length;
     return expected > 0 && room.battle.ratings.length >= expected;
   },
 
+  /**
+   * TODO(scoring-HU): winner-by-score with a proper tie-break (mid-song bonuses)
+   * is a separate HU. For now: highest total score wins; more than one leader
+   * at the top score is reported as a draw (winnerId: null).
+   */
   finishBattle(room: Room): Room {
     if (room.status !== "battling" || !room.battle) {
       throw new DomainError("ROOM_NOT_BATTLING", `Room ${room.code} has no battle in progress`);
@@ -156,12 +171,9 @@ export const RoomService = {
     for (const rating of room.battle.ratings) {
       scores[rating.dancerId] = (scores[rating.dancerId] ?? 0) + rating.score;
     }
-    const [first, second] = room.battle.dancerIds;
-    const result: BattleResult = {
-      scores,
-      winnerId:
-        scores[first]! === scores[second]! ? null : scores[first]! > scores[second]! ? first : second,
-    };
+    const maxScore = Math.max(...Object.values(scores));
+    const leaders = room.battle.dancerIds.filter((id) => scores[id] === maxScore);
+    const result: BattleResult = { scores, winnerId: leaders.length === 1 ? leaders[0] : null };
     return {
       ...room,
       status: "finished",
