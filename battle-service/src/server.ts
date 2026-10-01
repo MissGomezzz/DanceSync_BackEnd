@@ -11,6 +11,7 @@ import { env } from "./config/env.js";
 import { buildRouter, errorHandler } from "./infrastructure/http/routes.js";
 import { InMemoryRoomRepository } from "./infrastructure/persistence/InMemoryRoomRepository.js";
 import { registerSocketHandlers, type BattleServer } from "./infrastructure/ws/socketHandlers.js";
+import { SelectRole } from "./application/usecases/SelectRole.js";
 
 // Wiring: adapters -> use cases -> entry points.
 const rooms = new InMemoryRoomRepository();
@@ -19,6 +20,7 @@ const joinRoom = new JoinRoom(rooms);
 const startBattle = new StartBattle(rooms);
 const sendChatMessage = new SendChatMessage(rooms);
 const rateDancer = new RateDancer(rooms);
+const selectRole = new SelectRole(rooms);
 
 const app = express();
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
@@ -34,6 +36,7 @@ const io: BattleServer = new Server(httpServer, {
 registerSocketHandlers(io, {
   joinRoom,
   startBattle,
+  selectRole,
   sendChatMessage,
   rateDancer,
   disconnectGraceMs: env.disconnectGraceMs,

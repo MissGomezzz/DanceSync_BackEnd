@@ -10,6 +10,7 @@ export const ClientEvents = {
   RATING_SUBMIT: "rating:submit",
   WEBRTC_READY: "webrtc:ready",
   WEBRTC_SIGNAL: "webrtc:signal",
+  ROLE_SELECT: "role:select",
 } as const;
 
 /** Events emitted by the server. */
@@ -32,6 +33,12 @@ export interface RoomJoinPayload {
 export interface RoomLeavePayload {
   roomCode: string;
   playerId: string;
+}
+
+export interface RoleSelectPayload {
+  roomCode: string;
+  playerId: string;
+  role: "dancer" | "spectator";
 }
 
 export interface BattleStartPayload {
@@ -105,6 +112,7 @@ export interface ClientToServerEvents {
   [ClientEvents.RATING_SUBMIT]: (payload: RatingSubmitPayload, ack?: Ack<Room>) => void;
   [ClientEvents.WEBRTC_READY]: (payload: WebRtcReadyPayload, ack?: Ack<null>) => void;
   [ClientEvents.WEBRTC_SIGNAL]: (payload: WebRtcSignalPayload, ack?: Ack<null>) => void;
+  [ClientEvents.ROLE_SELECT]: (payload: RoleSelectPayload, ack?: Ack<Room>) => void;
 }
 
 export interface ServerToClientEvents {
