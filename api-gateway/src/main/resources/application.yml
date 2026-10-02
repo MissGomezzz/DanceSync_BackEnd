@@ -1,6 +1,11 @@
 server:
   port: ${GATEWAY_PORT:8080}
 
+# battle-service (Express) also sets CORS headers, so HTTP routes dedupe them:
+# browsers reject responses carrying the same CORS header twice.
+# The filter must NOT run on WebSocket upgrades: their response headers are
+# read-only once the handshake is committed and the upgrade would fail.
+
 spring:
   application:
     name: api-gateway
@@ -8,10 +13,6 @@ spring:
     gateway:
       server:
         webflux:
-          # battle-service (Express) also sets CORS headers; keep a single value
-          # so browsers do not reject responses with duplicated CORS headers.
-          default-filters:
-            - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Vary, RETAIN_UNIQUE
           globalcors:
             cors-configurations:
               '[/**]':
@@ -30,16 +31,28 @@ spring:
               uri: ${USERS_SERVICE_URL:http://localhost:8081}
               predicates:
                 - Path=/api/users/**
+              filters:
+                - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Vary, RETAIN_UNIQUE
             - id: battle-service-http
               uri: ${BATTLE_SERVICE_URL:http://localhost:3000}
               predicates:
                 - Path=/api/battles/**,/api/rooms/**
-            # Socket.IO starts with HTTP long-polling and then upgrades to WebSocket.
+              filters:
+                - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Vary, RETAIN_UNIQUE
+            # Socket.IO connects with HTTP long-polling and then upgrades to WebSocket.
             # Keep the http scheme: the gateway switches to ws automatically on Upgrade requests.
-            - id: battle-service-ws
+            # The WebSocket transport is matched first so it skips the dedupe filter.
+            - id: battle-service-socket-ws
               uri: ${BATTLE_SERVICE_URL:http://localhost:3000}
               predicates:
                 - Path=/socket.io/**
+                - Query=transport, websocket
+            - id: battle-service-socket-polling
+              uri: ${BATTLE_SERVICE_URL:http://localhost:3000}
+              predicates:
+                - Path=/socket.io/**
+              filters:
+                - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Vary, RETAIN_UNIQUE
 
 management:
   endpoints:
