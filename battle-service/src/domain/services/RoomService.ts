@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { DomainError } from "../errors/DomainError.js";
 import type { Battle, BattleResult } from "../model/Battle.js";
-import type { Player, PlayerRole } from "../model/Player.js";
+import { MAX_DISPLAY_NAME_LENGTH, MAX_PLAYER_ID_LENGTH, type Player, type PlayerRole } from "../model/Player.js";
 import { MAX_SCORE, MIN_SCORE, type Rating } from "../model/Rating.js";
 import { MAX_PLAYERS, MIN_DANCERS_PER_BATTLE, type Room } from "../model/Room.js";
 import { isSelectionInProgress, SongSelectionService } from "./SongSelectionService.js";
@@ -18,12 +18,43 @@ export function generateRoomCode(): string {
   return code;
 }
 
+/**
+ * Validates an identity coming from a client (room:join, POST /api/rooms) and
+ * returns it normalized. The id must be text of 1-64 characters without
+ * surrounding whitespace: it is compared verbatim on every later event, so it is
+ * rejected rather than trimmed into a different id. The display name is trimmed
+ * and must keep 1-32 characters.
+ */
+export function validatePlayer(id: unknown, displayName: unknown): Omit<Player, "role"> {
+  if (typeof id !== "string" || id.length === 0 || id.length > MAX_PLAYER_ID_LENGTH || id.trim() !== id) {
+    throw new DomainError(
+      "INVALID_PLAYER",
+      `The player id must be 1-${MAX_PLAYER_ID_LENGTH} characters without surrounding spaces`,
+    );
+  }
+  const name = typeof displayName === "string" ? displayName.trim() : "";
+  if (name.length === 0 || name.length > MAX_DISPLAY_NAME_LENGTH) {
+    throw new DomainError("INVALID_PLAYER", `The display name must be 1-${MAX_DISPLAY_NAME_LENGTH} characters`);
+  }
+  return { id, displayName: name };
+}
+
+/** A room code sent by a client; anything that is not non-empty text cannot name a room. */
+export function requireRoomCode(code: unknown): string {
+  if (typeof code !== "string" || code.trim().length === 0) {
+    throw new DomainError("ROOM_NOT_FOUND", "A room code is required");
+  }
+  return code.trim();
+}
+
+const PLAYABLE_ROLES: readonly string[] = ["dancer", "spectator"] satisfies PlayerRole[];
+
 export const RoomService = {
   create(host: Omit<Player, "role">, code: string = generateRoomCode()): Room {
-    const hostPlayer: Player = { ...host, role: "undecided" };
+    const hostPlayer: Player = { ...validatePlayer(host.id, host.displayName), role: "undecided" };
     return {
       code,
-      hostId: host.id,
+      hostId: hostPlayer.id,
       players: [hostPlayer],
       dancers: null,
       spectators: [],
@@ -46,12 +77,16 @@ export const RoomService = {
     if (room.players.length >= MAX_PLAYERS) {
       throw new DomainError("ROOM_FULL", `Room ${room.code} already has ${MAX_PLAYERS} players`);
     }
-    const joined: Player = { ...player, role: "undecided" };
+    const joined: Player = { ...validatePlayer(player.id, player.displayName), role: "undecided" };
     return { ...room, players: [...room.players, joined] };
   },
 
   /** Sets a player's chosen role while the room is still in the lobby. */
   selectRole(room: Room, playerId: string, role: Exclude<PlayerRole, "undecided">): Room {
+    // Clients send the role over the wire: check it at runtime, not only in the type.
+    if (!PLAYABLE_ROLES.includes(role)) {
+      throw new DomainError("INVALID_MESSAGE", 'The role must be "dancer" or "spectator"');
+    }
     if (room.status !== "waiting") {
       throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} is not accepting role changes`);
     }
@@ -101,6 +136,10 @@ export const RoomService = {
     }
     if (isSelectionInProgress(room)) {
       throw new DomainError("SONG_SELECTION_IN_PROGRESS", "Wait until the song has been chosen");
+    }
+    const explicit: unknown = dancerIds;
+    if (explicit != null && (!Array.isArray(explicit) || explicit.some((id) => typeof id !== "string"))) {
+      throw new DomainError("INVALID_DANCER", "dancerIds must be a list of player ids");
     }
     const selectedIds = dancerIds ?? room.players.filter((p) => p.role === "dancer").map((p) => p.id);
     if (new Set(selectedIds).size !== selectedIds.length) {

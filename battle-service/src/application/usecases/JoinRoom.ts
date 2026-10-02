@@ -1,6 +1,6 @@
 import type { Room } from "../../domain/model/Room.js";
 import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
-import { RoomService } from "../../domain/services/RoomService.js";
+import { RoomService, requireRoomCode, validatePlayer } from "../../domain/services/RoomService.js";
 import { updateRoom } from "../roomUpdates.js";
 
 export interface JoinRoomInput {
@@ -28,15 +28,16 @@ export interface LeaveRoomOutput {
 export class JoinRoom {
   constructor(private readonly rooms: RoomRepository) {}
 
+  /** The payload comes straight from a client: every field is validated before use. */
   async execute(input: JoinRoomInput): Promise<Room> {
-    return updateRoom(this.rooms, input.roomCode, (room) =>
+    const roomCode = requireRoomCode(input.roomCode);
+    const player = validatePlayer(input.playerId, input.displayName);
+    return updateRoom(this.rooms, roomCode, (room) =>
       // Idempotent rejoin: the host is added when the room is created and clients
       // re-emit room:join after a page refresh. Returning the room unchanged lets
       // the socket handler still join the channel and broadcast the current state,
       // while RoomService.join stays a strict domain rule.
-      room.players.some((p) => p.id === input.playerId)
-        ? room
-        : RoomService.join(room, { id: input.playerId, displayName: input.displayName }),
+      room.players.some((p) => p.id === player.id) ? room : RoomService.join(room, player),
     );
   }
 

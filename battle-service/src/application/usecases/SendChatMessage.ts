@@ -21,6 +21,9 @@ export class SendChatMessage {
       throw new DomainError("PLAYER_NOT_IN_ROOM", `Player ${input.senderId} is not in room ${room.code}`);
     }
 
+    if (typeof input.content !== "string") {
+      throw new DomainError("INVALID_MESSAGE", "The message must be text");
+    }
     const content = input.content.trim();
     if (content.length === 0 || content.length > MAX_MESSAGE_LENGTH) {
       throw new DomainError("INVALID_MESSAGE", `Message must be between 1 and ${MAX_MESSAGE_LENGTH} characters`);

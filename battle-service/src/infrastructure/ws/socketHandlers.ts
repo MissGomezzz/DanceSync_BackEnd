@@ -18,6 +18,7 @@ import {
   ServerEvents,
   type Ack,
   type ClientToServerEvents,
+  type RoomJoinPayload,
   type ServerToClientEvents,
   type SocketData,
   type WebRtcSignalPayload,
@@ -55,7 +56,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     // once Azure Entra ID is wired it will come from the validated token instead.
     socket.on(ClientEvents.ROOM_JOIN, (payload, ack) =>
       guard(socket, ack, async () => {
-        const room = await deps.joinRoom.execute(payload);
+        // JoinRoom validates every field (INVALID_PLAYER / ROOM_NOT_FOUND).
+        const room = await deps.joinRoom.execute(payload ?? ({} as RoomJoinPayload));
         socket.data.playerId = payload.playerId;
         socket.data.roomCode = room.code;
         await socket.join(room.code);

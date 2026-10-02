@@ -15,6 +15,7 @@ const STATUS_BY_CODE: Record<DomainErrorCode, number> = {
   ROOM_NOT_BATTLING: 409,
   PLAYER_ALREADY_IN_ROOM: 409,
   PLAYER_NOT_IN_ROOM: 403,
+  INVALID_PLAYER: 400,
   NOT_ENOUGH_PLAYERS: 409,
   NOT_ENOUGH_DANCERS: 409,
   INVALID_DANCER: 400,
@@ -42,11 +43,8 @@ export function buildRouter(deps: HttpDependencies): Router {
 
   router.post("/api/rooms", async (req, res, next) => {
     try {
-      const { hostId, displayName } = (req.body ?? {}) as Partial<{ hostId: string; displayName: string }>;
-      if (!isNonEmptyString(hostId) || !isNonEmptyString(displayName)) {
-        res.status(400).json({ error: "hostId and displayName are required" });
-        return;
-      }
+      // CreateRoom validates both fields and answers INVALID_PLAYER (400) otherwise.
+      const { hostId, displayName } = (req.body ?? {}) as { hostId: string; displayName: string };
       const room = await deps.createRoom.execute({ hostId, displayName });
       res.status(201).location(`/api/rooms/${room.code}`).json(room);
     } catch (error) {
@@ -77,8 +75,4 @@ export function errorHandler(error: unknown, _req: Request, res: Response, _next
   }
   console.error("Unhandled error", error);
   res.status(500).json({ error: "Internal server error" });
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
 }
