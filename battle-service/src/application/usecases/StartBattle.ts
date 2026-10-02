@@ -7,7 +7,8 @@ export interface StartBattleInput {
   roomCode: string;
   /** Player requesting the start; must be the room host. */
   requesterId: string;
-  dancerIds?: [string, string];
+  /** Overrides the dancers chosen through role:select; at least MIN_DANCERS_PER_BATTLE ids. */
+  dancerIds?: string[];
 }
 
 export class StartBattle {

@@ -52,7 +52,8 @@ export interface RoleSelectPayload {
 export interface BattleStartPayload {
   roomCode: string;
   requesterId: string;
-  dancerIds?: [string, string];
+  /** Overrides the dancers chosen through role:select; at least MIN_DANCERS_PER_BATTLE ids. */
+  dancerIds?: string[];
 }
 
 export interface SongChallengeStartPayload {
