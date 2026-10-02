@@ -65,21 +65,28 @@ export const RoomService = {
     };
   },
 
+  /**
+   * Removes a player. During a battle the departure can also settle it:
+   * - a dancer leaving is withdrawn from the battle; with at least
+   *   MIN_DANCERS_PER_BATTLE dancers left the battle goes on, otherwise it ends
+   *   early with `result: null`;
+   * - a dancer or a spectator leaving can leave every remaining spectator having
+   *   rated every remaining dancer, which finishes the battle with a result.
+   * Callers detect the end by comparing the status before and after.
+   */
   leave(room: Room, playerId: string): Room {
     if (!room.players.some((p) => p.id === playerId)) {
       throw new DomainError("PLAYER_NOT_IN_ROOM", `Player ${playerId} is not in room ${room.code}`);
     }
     const players = room.players.filter((p) => p.id !== playerId);
-    const dancers = room.dancers && room.dancers.some((d) => d.id === playerId) ? null : room.dancers;
     const updated: Room = {
       ...room,
       players,
-      dancers,
-      spectators: players.filter((p) => !dancers || !dancers.some((d) => d.id === p.id)),
+      dancers: room.dancers ? room.dancers.filter((d) => d.id !== playerId) : null,
+      spectators: room.spectators.filter((p) => p.id !== playerId),
       hostId: room.hostId === playerId ? (players[0]?.id ?? room.hostId) : room.hostId,
-      status: room.status === "battling" && dancers === null ? "finished" : room.status,
     };
-    return SongSelectionService.handlePlayerLeft(updated, playerId);
+    return SongSelectionService.handlePlayerLeft(settleBattleAfterLeave(updated, playerId), playerId);
   },
 
   /**
@@ -159,16 +166,28 @@ export const RoomService = {
     };
   },
 
+  /**
+   * True when every spectator still in the room rated every dancer still in the
+   * battle. Ratings from players who left are ignored here, so a departure can
+   * neither block nor fake completion.
+   */
   allRatingsSubmitted(room: Room): boolean {
     if (!room.battle) return false;
-    const expected = room.spectators.length * room.battle.dancerIds.length;
-    return expected > 0 && room.battle.ratings.length >= expected;
+    const { dancerIds, ratings } = room.battle;
+    if (room.spectators.length === 0 || dancerIds.length === 0) return false;
+    return room.spectators.every((spectator) =>
+      dancerIds.every((dancerId) => ratings.some((r) => r.raterId === spectator.id && r.dancerId === dancerId)),
+    );
   },
 
   /**
    * TODO(scoring-HU): winner-by-score with a proper tie-break (mid-song bonuses)
    * is a separate HU. For now: highest total score wins; more than one leader
    * at the top score is reported as a draw (winnerId: null).
+   *
+   * Only dancers still in the battle (battle.dancerIds) are scored. Ratings a
+   * dancer received before leaving stay in battle.ratings as history but do not
+   * appear in the result. Ratings from spectators who left still count.
    */
   finishBattle(room: Room): Room {
     if (room.status !== "battling" || !room.battle) {
@@ -177,7 +196,7 @@ export const RoomService = {
     const scores: Record<string, number> = {};
     for (const dancerId of room.battle.dancerIds) scores[dancerId] = 0;
     for (const rating of room.battle.ratings) {
-      scores[rating.dancerId] = (scores[rating.dancerId] ?? 0) + rating.score;
+      if (room.battle.dancerIds.includes(rating.dancerId)) scores[rating.dancerId] += rating.score;
     }
     const maxScore = Math.max(...Object.values(scores));
     const leaders = room.battle.dancerIds.filter((id) => scores[id] === maxScore);
@@ -189,3 +208,20 @@ export const RoomService = {
     };
   },
 };
+/**
+ * Applies a departure (already removed from players/dancers/spectators) to a
+ * running battle. A departed dancer is dropped from battle.dancerIds, so they
+ * can no longer be rated and no rating for them is required; ratings they
+ * already received are kept in battle.ratings but excluded from the result.
+ */
+function settleBattleAfterLeave(room: Room, playerId: string): Room {
+  const battle = room.battle;
+  if (room.status !== "battling" || !battle) return room;
+  const remaining: Battle = { ...battle, dancerIds: battle.dancerIds.filter((id) => id !== playerId) };
+  if (remaining.dancerIds.length < MIN_DANCERS_PER_BATTLE) {
+    // Not enough dancers to keep competing: the battle ends early, without a result.
+    return { ...room, status: "finished", battle: { ...remaining, finishedAt: new Date(), result: null } };
+  }
+  const continuing: Room = { ...room, battle: remaining };
+  return RoomService.allRatingsSubmitted(continuing) ? RoomService.finishBattle(continuing) : continuing;
+}

@@ -14,6 +14,17 @@ export interface LeaveRoomInput {
   playerId: string;
 }
 
+export interface LeaveRoomOutput {
+  /** The updated room, or null when the last player left and the room was removed. */
+  room: Room | null;
+  /**
+   * True when this departure finished the running battle: too few dancers are left
+   * (result null) or every remaining spectator had already rated every remaining
+   * dancer (result available). The caller must announce it and stop the word race.
+   */
+  battleFinished: boolean;
+}
+
 export class JoinRoom {
   constructor(private readonly rooms: RoomRepository) {}
 
@@ -31,16 +42,16 @@ export class JoinRoom {
     return updated;
   }
 
-  /** Returns the updated room, or null when the last player left and the room was removed. */
-  async leave(input: LeaveRoomInput): Promise<Room | null> {
+  async leave(input: LeaveRoomInput): Promise<LeaveRoomOutput> {
     const room = await this.requireRoom(input.roomCode);
     const updated = RoomService.leave(room, input.playerId);
+    const battleFinished = room.status === "battling" && updated.status === "finished";
     if (updated.players.length === 0) {
       await this.rooms.delete(room.code);
-      return null;
+      return { room: null, battleFinished };
     }
     await this.rooms.save(updated);
-    return updated;
+    return { room: updated, battleFinished };
   }
 
   private async requireRoom(code: string): Promise<Room> {

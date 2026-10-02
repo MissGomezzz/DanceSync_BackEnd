@@ -1,6 +1,6 @@
 # DanceSync_BackEnd
 
-Backend monorepo for **DanceSync**, a Just-Dance-style web app. Up to 8 users join a room: two of them dance-battle in real time while the other six spectate, chat, and rate the dancers when the battle ends.
+Backend monorepo for **DanceSync**, a Just-Dance-style web app. Up to 7 users join a room and each chooses to dance or to spectate: at least two dancers battle in real time while the spectators chat and rate them.
 
 ## Overview
 
@@ -167,7 +167,9 @@ Socket.IO (path `/socket.io`):
 
 **Identity.** `room:join` binds the socket to `(roomCode, playerId)`. Every other client event must name that same room and player (`playerId`, `requesterId`, `senderId`, `raterId` or `from`); otherwise the ack returns `PLAYER_NOT_IN_ROOM` and nothing happens, so nobody can kick, start as the host, chat or rate as someone else. Authentication is mocked for now: once Azure Entra ID is wired, the identity bound on `room:join` will come from the validated token instead of the payload. Host-only actions sent by a non-host fail with `NOT_HOST`.
 
-Rooms hold at most 8 players. When the host starts the battle, two players become dancers and the rest spectate; the battle finishes automatically once every spectator has rated both dancers.
+Rooms hold at most 7 players. In the lobby each player chooses `dancer` or `spectator` (`role:select`); the host can start once at least 2 players chose to dance, and anyone still undecided spectates. The battle finishes automatically, with a result, once every spectator in the room has rated every dancer in the battle.
+
+**Leaving mid-battle.** A dancer who leaves (or whose seat is released after the disconnect grace period) is withdrawn from `battle.dancerIds` and can no longer be rated. With at least 2 dancers left the battle goes on: no rating for the departed dancer is required, and ratings they already received stay in `battle.ratings` as history but are excluded from `battle.result`. With fewer than 2 dancers left the battle ends early with `result: null`. A departure (dancer or spectator) that leaves every remaining spectator having rated every remaining dancer finishes the battle with a result; ratings from spectators who left still count. Every path that finishes a battle (last rating, leave, released seat) emits `room:updated` and `battle:finished` and stops the word race.
 
 **Song selection.** In the lobby the host starts a typing challenge: the server picks a random phrase, sets `room.songSelection` (phase `typing`, `challenge.phrase`, `challenge.expiresAt`) and broadcasts it. The first dancer who submits the exact phrase (case sensitive, surrounding spaces ignored) wins the right to pick the song (phase `choosing`). A misspelled submission is rejected and costs that player their chance for the round. When the countdown (`SONG_CHALLENGE_MS`, default 15 s) runs out, or every dancer misspelled it, the server passes the turn to a random dancer still in the room, preferring those who did not misspell. The chosen song is stored in `room.selectedSong` and copied to `battle.song` when the battle starts; the battle cannot start while a selection is in progress.
 

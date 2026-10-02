@@ -1,5 +1,5 @@
 import type { Server, Socket } from "socket.io";
-import type { JoinRoom } from "../../application/usecases/JoinRoom.js";
+import type { JoinRoom, LeaveRoomOutput } from "../../application/usecases/JoinRoom.js";
 import type { RateDancer } from "../../application/usecases/RateDancer.js";
 import type { SendChatMessage } from "../../application/usecases/SendChatMessage.js";
 import type { StartBattle } from "../../application/usecases/StartBattle.js";
@@ -78,12 +78,11 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     socket.on(ClientEvents.ROOM_LEAVE, (payload, ack) =>
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
-        const room = await deps.joinRoom.leave({ roomCode, playerId: payload.playerId });
+        const left = await deps.joinRoom.leave({ roomCode, playerId: payload.playerId });
         await socket.leave(roomCode);
         socket.data.roomCode = undefined;
-        if (room) io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        await stopWordRaceUnlessBattling(deps, roomCode, room);
-        return room;
+        await announceLeave(io, deps, roomCode, left);
+        return left.room;
       }),
     );
 
@@ -161,10 +160,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.raterId);
         const { room, finished } = await deps.rateDancer.execute({ ...payload, roomCode });
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        if (finished) {
-          io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, room);
-          await deps.wordRace?.scheduler.stop(room.code);
-        }
+        if (finished) await announceBattleFinished(io, deps, room);
         return room;
       }),
     );
@@ -226,16 +222,41 @@ async function releaseSeatIfAbandoned(
   try {
     const sockets = await io.in(roomCode).fetchSockets();
     if (sockets.some((s) => s.data.playerId === playerId)) return; // Player is back.
-    const room = await deps.joinRoom.leave({ roomCode, playerId });
-    if (room) io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-    await stopWordRaceUnlessBattling(deps, roomCode, room);
+    await announceLeave(io, deps, roomCode, await deps.joinRoom.leave({ roomCode, playerId }));
   } catch (error) {
     // The player may have left explicitly or the room may already be gone.
     if (!(error instanceof DomainError)) console.error("Error releasing abandoned seat", error);
   }
 }
 
-/** A leave can delete the room or end the battle (a dancer left); the race must stop with it. */
+/**
+ * Broadcasts the outcome of a departure (explicit room:leave or a seat released
+ * after the disconnect grace period). The departure may have finished the
+ * battle, which is announced like a battle finished by the last rating.
+ */
+async function announceLeave(
+  io: BattleServer,
+  deps: SocketDependencies,
+  roomCode: string,
+  { room, battleFinished }: LeaveRoomOutput,
+): Promise<void> {
+  if (room) {
+    io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+    if (battleFinished) {
+      await announceBattleFinished(io, deps, room);
+      return;
+    }
+  }
+  await stopWordRaceUnlessBattling(deps, roomCode, room);
+}
+
+/** Single exit for every path that finishes a battle: rating, leave or released seat. */
+async function announceBattleFinished(io: BattleServer, deps: SocketDependencies, room: Room): Promise<void> {
+  io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, room);
+  await deps.wordRace?.scheduler.stop(room.code);
+}
+
+/** A leave can delete the room; the race must stop with it. */
 async function stopWordRaceUnlessBattling(
   deps: SocketDependencies,
   roomCode: string,
