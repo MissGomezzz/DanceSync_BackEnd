@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../../domain/model/ChatMessage.js";
 import type { Room } from "../../domain/model/Room.js";
+import type { SubmitWordOutcome } from "../../domain/model/WordRace.js";
 import type { SubmitOutcome } from "../../domain/services/SongSelectionService.js";
 
 /** Events emitted by clients. */
@@ -15,6 +16,7 @@ export const ClientEvents = {
   SONG_CHALLENGE_START: "song-challenge:start",
   SONG_CHALLENGE_SUBMIT: "song-challenge:submit",
   SONG_CHOOSE: "song:choose",
+  WORD_SUBMIT: "word:submit",
 } as const;
 
 /** Events emitted by the server. */
@@ -25,6 +27,8 @@ export const ServerEvents = {
   BATTLE_FINISHED: "battle:finished",
   WEBRTC_PEER_READY: "webrtc:peer-ready",
   WEBRTC_SIGNAL: "webrtc:signal",
+  WORD_ROUND_STARTED: "word:round-started",
+  WORD_ROUND_ENDED: "word:round-ended",
   ERROR: "error:domain",
 } as const;
 
@@ -123,6 +127,43 @@ export interface WebRtcSignalPayload {
   candidate?: WebRtcIceCandidate;
 }
 
+/** A dancer's attempt at the word currently on screen. */
+export interface WordSubmitPayload {
+  roomCode: string;
+  playerId: string;
+  roundId: string;
+  text: string;
+}
+
+export interface WordSubmitResult {
+  /** won: first correct; late: correct but someone won first; incorrect: retry allowed; expired: too late. */
+  outcome: SubmitWordOutcome;
+  winnerId: string | null;
+}
+
+export interface WordRoundStartedPayload {
+  roomCode: string;
+  roundId: string;
+  roundNumber: number;
+  totalRounds: number;
+  word: string;
+  /** Time left in this round, computed by the server; clients never compare clocks. */
+  expiresInMs: number;
+}
+
+export interface WordRoundEndedPayload {
+  roomCode: string;
+  roundId: string;
+  roundNumber: number;
+  totalRounds: number;
+  word: string;
+  winnerId: string | null;
+  winnerName: string | null;
+  reason: "won" | "expired";
+  /** Rounds won so far per dancer. */
+  wins: Record<string, number>;
+}
+
 export interface DomainErrorPayload {
   code: string;
   message: string;
@@ -146,6 +187,7 @@ export interface ClientToServerEvents {
     ack?: Ack<SongChallengeSubmitResult>,
   ) => void;
   [ClientEvents.SONG_CHOOSE]: (payload: SongChoosePayload, ack?: Ack<Room>) => void;
+  [ClientEvents.WORD_SUBMIT]: (payload: WordSubmitPayload, ack?: Ack<WordSubmitResult>) => void;
 }
 
 export interface ServerToClientEvents {
@@ -155,6 +197,8 @@ export interface ServerToClientEvents {
   [ServerEvents.BATTLE_FINISHED]: (room: Room) => void;
   [ServerEvents.WEBRTC_PEER_READY]: (payload: WebRtcPeerReadyPayload) => void;
   [ServerEvents.WEBRTC_SIGNAL]: (payload: WebRtcSignalPayload) => void;
+  [ServerEvents.WORD_ROUND_STARTED]: (payload: WordRoundStartedPayload) => void;
+  [ServerEvents.WORD_ROUND_ENDED]: (payload: WordRoundEndedPayload) => void;
   [ServerEvents.ERROR]: (error: DomainErrorPayload) => void;
 }
 

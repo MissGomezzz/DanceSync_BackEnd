@@ -28,6 +28,8 @@ const STATUS_BY_CODE: Record<DomainErrorCode, number> = {
   ATTEMPT_ALREADY_USED: 409,
   NOT_SONG_CHOOSER: 403,
   INVALID_SONG: 400,
+  WORD_RACE_NOT_ACTIVE: 409,
+  WORD_ROUND_NOT_OPEN: 409,
 };
 
 export function buildRouter(deps: HttpDependencies): Router {

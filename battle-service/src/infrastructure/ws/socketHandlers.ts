@@ -7,7 +7,12 @@ import type { SelectRole } from "../../application/usecases/SelectRole.js";
 import type { ChooseSong } from "../../application/usecases/ChooseSong.js";
 import type { StartSongChallenge } from "../../application/usecases/StartSongChallenge.js";
 import type { SubmitSongPhrase } from "../../application/usecases/SubmitSongPhrase.js";
+import type { GetActiveWordRound } from "../../application/usecases/GetActiveWordRound.js";
+import type { SubmitWord } from "../../application/usecases/SubmitWord.js";
 import { DomainError } from "../../domain/errors/DomainError.js";
+import type { Room } from "../../domain/model/Room.js";
+import type { WordRaceScheduler } from "../scheduling/WordRaceScheduler.js";
+import { roundEndedPayload, roundStartedPayload } from "./wordRaceMessages.js";
 import {
   ClientEvents,
   ServerEvents,
@@ -32,6 +37,14 @@ export interface SocketDependencies {
   chooseSong: ChooseSong;
   /** Seat retention after a disconnect, see env.disconnectGraceMs. */
   disconnectGraceMs: number;
+  /** Mid-battle word race. Optional so harnesses that do not exercise it can omit it. */
+  wordRace?: WordRaceSocketDependencies;
+}
+
+export interface WordRaceSocketDependencies {
+  scheduler: WordRaceScheduler;
+  submitWord: SubmitWord;
+  getActiveWordRound: GetActiveWordRound;
 }
 
 export function registerSocketHandlers(io: BattleServer, deps: SocketDependencies): void {
@@ -44,6 +57,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         await socket.join(room.code);
         await socket.join(playerChannel(payload.playerId));
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+        if (room.status === "battling") await resyncWordRound(socket, deps, room.code);
         return room;
       }),
     );
@@ -62,6 +76,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         await socket.leave(payload.roomCode);
         socket.data.roomCode = undefined;
         if (room) io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+        await stopWordRaceUnlessBattling(deps, payload.roomCode, room);
         return room;
       }),
     );
@@ -71,7 +86,25 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const room = await deps.startBattle.execute(payload);
         io.to(room.code).emit(ServerEvents.BATTLE_STARTED, room);
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+        // The battle already started; a failure planning the word race must not undo it.
+        deps.wordRace?.scheduler
+          .start(room.code)
+          .catch((error: unknown) => console.error("Error starting the word race", error));
         return room;
+      }),
+    );
+
+    socket.on(ClientEvents.WORD_SUBMIT, (payload, ack) =>
+      guard(socket, ack, async () => {
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
+        if (!deps.wordRace) throw new DomainError("WORD_RACE_NOT_ACTIVE", "The word race is not enabled");
+        const result = await deps.wordRace.submitWord.execute({ ...payload, roomCode });
+        // Only the submission whose atomic claim succeeded announces the winner, so
+        // the room receives exactly one word:round-ended per round.
+        if (result.outcome === "won") {
+          io.to(roomCode).emit(ServerEvents.WORD_ROUND_ENDED, roundEndedPayload(result.race, result.round));
+        }
+        return { outcome: result.outcome, winnerId: result.round.winnerId };
       }),
     );
 
@@ -118,7 +151,10 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const { room, finished } = await deps.rateDancer.execute(payload);
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        if (finished) io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, room);
+        if (finished) {
+          io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, room);
+          await deps.wordRace?.scheduler.stop(room.code);
+        }
         return room;
       }),
     );
@@ -182,10 +218,28 @@ async function releaseSeatIfAbandoned(
     if (sockets.some((s) => s.data.playerId === playerId)) return; // Player is back.
     const room = await deps.joinRoom.leave({ roomCode, playerId });
     if (room) io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+    await stopWordRaceUnlessBattling(deps, roomCode, room);
   } catch (error) {
     // The player may have left explicitly or the room may already be gone.
     if (!(error instanceof DomainError)) console.error("Error releasing abandoned seat", error);
   }
+}
+
+/** A leave can delete the room or end the battle (a dancer left); the race must stop with it. */
+async function stopWordRaceUnlessBattling(
+  deps: SocketDependencies,
+  roomCode: string,
+  room: Room | null,
+): Promise<void> {
+  if (!deps.wordRace || room?.status === "battling") return;
+  await deps.wordRace.scheduler.stop(room?.code ?? roomCode);
+}
+
+/** A client that (re)joins mid-round gets the word on screen with the time actually left. */
+async function resyncWordRound(socket: BattleSocket, deps: SocketDependencies, roomCode: string): Promise<void> {
+  if (!deps.wordRace) return;
+  const active = await deps.wordRace.getActiveWordRound.execute({ roomCode });
+  if (active) socket.emit(ServerEvents.WORD_ROUND_STARTED, roundStartedPayload(active.race, active.round, new Date()));
 }
 
 function playerChannel(playerId: string): string {

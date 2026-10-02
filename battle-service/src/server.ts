@@ -15,9 +15,19 @@ import { SelectRole } from "./application/usecases/SelectRole.js";
 import { ChooseSong } from "./application/usecases/ChooseSong.js";
 import { StartSongChallenge } from "./application/usecases/StartSongChallenge.js";
 import { SubmitSongPhrase } from "./application/usecases/SubmitSongPhrase.js";
+import { StartWordRace } from "./application/usecases/StartWordRace.js";
+import { OpenWordRound } from "./application/usecases/OpenWordRound.js";
+import { ExpireWordRound } from "./application/usecases/ExpireWordRound.js";
+import { StopWordRace } from "./application/usecases/StopWordRace.js";
+import { SubmitWord } from "./application/usecases/SubmitWord.js";
+import { GetActiveWordRound } from "./application/usecases/GetActiveWordRound.js";
+import { InMemoryWordRaceRepository } from "./infrastructure/persistence/InMemoryWordRaceRepository.js";
+import { WordRaceScheduler } from "./infrastructure/scheduling/WordRaceScheduler.js";
+import { createSocketWordRaceBroadcaster } from "./infrastructure/ws/wordRaceMessages.js";
 
 // Wiring: adapters -> use cases -> entry points.
 const rooms = new InMemoryRoomRepository();
+const wordRaces = new InMemoryWordRaceRepository();
 const createRoom = new CreateRoom(rooms);
 const joinRoom = new JoinRoom(rooms);
 const startBattle = new StartBattle(rooms);
@@ -39,6 +49,18 @@ const io: BattleServer = new Server(httpServer, {
   path: "/socket.io",
   cors: { origin: env.corsOrigin, credentials: true },
 });
+const wordRaceScheduler = new WordRaceScheduler({
+  startWordRace: new StartWordRace(rooms, wordRaces, {
+    rounds: env.wordRaceRounds,
+    windowMs: env.wordRaceWindowMs,
+    minGapMs: env.wordRaceMinGapMs,
+    fallbackDurationMs: env.wordRaceFallbackDurationMs,
+  }),
+  openWordRound: new OpenWordRound(rooms, wordRaces),
+  expireWordRound: new ExpireWordRound(wordRaces),
+  stopWordRace: new StopWordRace(wordRaces),
+  broadcaster: createSocketWordRaceBroadcaster(io),
+});
 registerSocketHandlers(io, {
   joinRoom,
   startBattle,
@@ -49,6 +71,11 @@ registerSocketHandlers(io, {
   submitSongPhrase,
   chooseSong,
   disconnectGraceMs: env.disconnectGraceMs,
+  wordRace: {
+    scheduler: wordRaceScheduler,
+    submitWord: new SubmitWord(wordRaces),
+    getActiveWordRound: new GetActiveWordRound(wordRaces),
+  },
 });
 
 httpServer.listen(env.port, () => {

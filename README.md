@@ -103,7 +103,7 @@ cd users-service && mvnw.cmd -DskipTests package && mvnw.cmd test
 cd api-gateway && mvnw.cmd -DskipTests package
 
 # battle-service
-cd battle-service && pnpm typecheck && pnpm build
+cd battle-service && pnpm typecheck && pnpm build && pnpm test
 ```
 
 ## Environment variables
@@ -121,6 +121,8 @@ Defaults live in `.env.example`; every service falls back to the same values whe
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | api-gateway (CORS) |
 | `PORT` | `3000` | battle-service |
 | `CORS_ORIGIN` | `http://localhost:5173` | battle-service |
+| `WORD_RACE_ROUNDS` / `WORD_RACE_WINDOW_MS` | `3` / `10000` | battle-service (word race rounds per battle, time to type each word) |
+| `WORD_RACE_MIN_GAP_MS` / `WORD_RACE_FALLBACK_DURATION_MS` | `12000` / `90000` | battle-service (time between round openings, song length when there is no song) |
 
 `battle-service` reads its own `battle-service/.env` (see `battle-service/.env.example`).
 
@@ -153,16 +155,42 @@ Socket.IO (path `/socket.io`):
 | client -> server | `song:choose` | `{ roomCode, playerId, songId }` (only the challenge winner) |
 | client -> server | `webrtc:ready` | `{ roomCode, playerId }` - the sender is ready to (re)negotiate its camera connections |
 | client -> server | `webrtc:signal` | `{ roomCode, from, to, negotiationId, description?, candidate? }` - SDP offer/answer or ICE candidate |
+| client -> server | `word:submit` | `{ roomCode, playerId, roundId, text }` (dancers in the battle) - ack data `{ outcome: "won" \| "late" \| "incorrect" \| "expired", winnerId }` |
 | server -> client | `room:updated` | `Room` |
 | server -> client | `battle:started` | `Room` |
 | server -> client | `chat:message` | `ChatMessage` |
 | server -> client | `battle:finished` | `Room` (includes `battle.result`) |
 | server -> client | `webrtc:peer-ready` | `{ playerId }` - broadcast to the rest of the room after `webrtc:ready` |
 | server -> client | `webrtc:signal` | same payload as the client event, delivered only to the `to` player |
+| server -> client | `word:round-started` | `{ roomCode, roundId, roundNumber, totalRounds, word, expiresInMs }` - to the whole room, and to a single socket that (re)joins mid-round |
+| server -> client | `word:round-ended` | `{ roomCode, roundId, roundNumber, totalRounds, word, winnerId, winnerName, reason: "won" \| "expired", wins }` - exactly once per round |
 
 Rooms hold at most 8 players. When the host starts the battle, two players become dancers and the rest spectate; the battle finishes automatically once every spectator has rated both dancers.
 
 **Song selection.** In the lobby the host starts a typing challenge: the server picks a random phrase, sets `room.songSelection` (phase `typing`, `challenge.phrase`, `challenge.expiresAt`) and broadcasts it. The first dancer who submits the exact phrase (case sensitive, surrounding spaces ignored) wins the right to pick the song (phase `choosing`). A misspelled submission is rejected and costs that player their chance for the round. When the countdown (`SONG_CHALLENGE_MS`, default 15 s) runs out, or every dancer misspelled it, the server passes the turn to a random dancer still in the room, preferring those who did not misspell. The chosen song is stored in `room.selectedSong` and copied to `battle.song` when the battle starts; the battle cannot start while a selection is in progress.
+
+**Word race.** When a battle starts the server plans a few rounds (`WORD_RACE_ROUNDS`, default 3) at random moments of the song (between 10% and 85% of it; `WORD_RACE_FALLBACK_DURATION_MS` when the battle has no song), each with a different Spanish word from `src/domain/catalog/words.ts`. When a round opens, everyone gets `word:round-started` with the time left (`WORD_RACE_WINDOW_MS`, default 10 s; openings at least `WORD_RACE_MIN_GAP_MS` apart). Dancers send `word:submit`; the comparison ignores case and surrounding spaces, and a typo does not lock the dancer out. The first correct submission wins (`won`); a correct one that arrives after it gets `late`. The room then receives a single `word:round-ended` with the winner, or with reason `expired` when nobody typed it in time. Wins are tallied per dancer (`wins`) but do not change the battle score yet. The race stops when the battle finishes or the room is deleted.
+
+### Concurrency: who wins the word
+
+The song challenge decides its winner with read -> decide -> save on the whole `Room` (`findByCode`, pure `submit`, `save`). It is correct today only by accident: the in-memory `Map` answers synchronously and Node runs one callback at a time. With an async store (Redis and Postgres are on the roadmap) or two battle-service instances, two dancers can both read "nobody won yet" and both be told they won (lost update). On top of that, spectators save ratings on the same `Room` while the battle runs, so race state stored inside `Room` could be overwritten by a concurrent rating save. The word race therefore:
+
+1. Keeps its state in its own aggregate and repository (`WordRace`, `WordRaceRepository`), not inside `Room`.
+2. Decides the winner with an atomic compare-and-set on the repository port, `claimRound(roomCode, roundId, playerId, now)`: it succeeds only if the round is open, before `closesAt` and without a winner, and it increments the winner's tally in the same step. `SubmitWord` validates the text (`WordRaceService.judge`) but never decides from its own earlier read; a failed claim is reported as `late` (or `expired`). Expiring a round is the complementary CAS (`open`, no winner, at or after `closesAt`), so a claim and an expiry can never both succeed, and only the code path whose CAS succeeded broadcasts `word:round-ended`.
+3. Proves it with tests.
+
+How the port maps to a real store:
+
+| Operation | Redis | SQL |
+|---|---|---|
+| `claimRound` | `SET word:{room}:{round}:winner <playerId> NX PX <ttl>` (`OK` = you won), or a Lua script that also bumps the tally | `UPDATE word_rounds SET winner_id = $1, status = 'won' WHERE id = $2 AND status = 'open' AND winner_id IS NULL AND closes_at > now()`; `rowCount === 1` = you won |
+| `expireRound` | Lua script that expires only when the winner key is absent | `UPDATE word_rounds SET status = 'expired' WHERE id = $1 AND status = 'open' AND winner_id IS NULL AND closes_at <= now()` |
+
+`InMemoryWordRaceRepository` implements each CAS as one synchronous block (no `await` between read and write), the in-memory equivalent of the Lua script or the conditional `UPDATE`.
+
+`test/wordRace.concurrency.test.ts` wraps the in-memory store in a decorator that waits a random 0-5 ms before every call (like a network round trip), fires 100 simultaneous correct submissions 50 times and asserts exactly one `won` and 99 `late` each time. A negative control runs a naive read-then-save version through the same slow store and asserts it does hand out several wins, which shows the test can catch the bug. Run it with `pnpm test` (all tests) or `npx tsx --test test/wordRace.concurrency.test.ts`.
+
+Recommendation: migrate the song challenge to the same pattern (its own `SongSelection` repository with a `claimChooser` CAS) before moving rooms to Redis or Postgres.
 
 The `webrtc:*` events are a thin signaling relay for the dancers' live cameras (media flows peer to peer, never through the server). The server only checks that the sender joined that room as `playerId`/`from` and that `to` is connected to the same room; otherwise the ack returns `{ ok: false }` and nothing is relayed. Each socket also joins a `player:<playerId>` channel on `room:join` so signals can target a single player.
 

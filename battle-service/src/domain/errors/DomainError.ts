@@ -17,7 +17,9 @@ export type DomainErrorCode =
   | "NOT_CHALLENGE_PARTICIPANT"
   | "ATTEMPT_ALREADY_USED"
   | "NOT_SONG_CHOOSER"
-  | "INVALID_SONG";
+  | "INVALID_SONG"
+  | "WORD_RACE_NOT_ACTIVE"
+  | "WORD_ROUND_NOT_OPEN";
 
 export class DomainError extends Error {
   constructor(
