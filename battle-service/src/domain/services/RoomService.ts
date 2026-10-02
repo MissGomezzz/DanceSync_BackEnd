@@ -4,6 +4,7 @@ import type { Battle, BattleResult } from "../model/Battle.js";
 import type { Player, PlayerRole } from "../model/Player.js";
 import { MAX_SCORE, MIN_SCORE, type Rating } from "../model/Rating.js";
 import { MAX_PLAYERS, MIN_DANCERS_PER_BATTLE, type Room } from "../model/Room.js";
+import { isSelectionInProgress, SongSelectionService } from "./SongSelectionService.js";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_LENGTH = 6;
@@ -28,6 +29,8 @@ export const RoomService = {
       spectators: [],
       status: "waiting",
       battle: null,
+      songSelection: null,
+      selectedSong: null,
       createdAt: new Date(),
     };
   },
@@ -68,7 +71,7 @@ export const RoomService = {
     }
     const players = room.players.filter((p) => p.id !== playerId);
     const dancers = room.dancers && room.dancers.some((d) => d.id === playerId) ? null : room.dancers;
-    return {
+    const updated: Room = {
       ...room,
       players,
       dancers,
@@ -76,6 +79,7 @@ export const RoomService = {
       hostId: room.hostId === playerId ? (players[0]?.id ?? room.hostId) : room.hostId,
       status: room.status === "battling" && dancers === null ? "finished" : room.status,
     };
+    return SongSelectionService.handlePlayerLeft(updated, playerId);
   },
 
   /**
@@ -86,6 +90,9 @@ export const RoomService = {
   startBattle(room: Room, dancerIds?: string[]): Room {
     if (room.status !== "waiting") {
       throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} already started`);
+    }
+    if (isSelectionInProgress(room)) {
+      throw new DomainError("SONG_SELECTION_IN_PROGRESS", "Wait until the song has been chosen");
     }
     const selectedIds = dancerIds ?? room.players.filter((p) => p.role === "dancer").map((p) => p.id);
     if (new Set(selectedIds).size !== selectedIds.length) {
@@ -111,6 +118,7 @@ export const RoomService = {
       id: randomUUID(),
       roomCode: room.code,
       dancerIds: dancers.map((d) => d.id),
+      song: room.selectedSong,
       ratings: [],
       startedAt: new Date(),
       finishedAt: null,

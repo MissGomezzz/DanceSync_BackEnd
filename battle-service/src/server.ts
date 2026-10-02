@@ -12,6 +12,9 @@ import { buildRouter, errorHandler } from "./infrastructure/http/routes.js";
 import { InMemoryRoomRepository } from "./infrastructure/persistence/InMemoryRoomRepository.js";
 import { registerSocketHandlers, type BattleServer } from "./infrastructure/ws/socketHandlers.js";
 import { SelectRole } from "./application/usecases/SelectRole.js";
+import { ChooseSong } from "./application/usecases/ChooseSong.js";
+import { StartSongChallenge } from "./application/usecases/StartSongChallenge.js";
+import { SubmitSongPhrase } from "./application/usecases/SubmitSongPhrase.js";
 
 // Wiring: adapters -> use cases -> entry points.
 const rooms = new InMemoryRoomRepository();
@@ -21,6 +24,9 @@ const startBattle = new StartBattle(rooms);
 const sendChatMessage = new SendChatMessage(rooms);
 const rateDancer = new RateDancer(rooms);
 const selectRole = new SelectRole(rooms);
+const startSongChallenge = new StartSongChallenge(rooms, { durationMs: env.songChallengeMs });
+const submitSongPhrase = new SubmitSongPhrase(rooms);
+const chooseSong = new ChooseSong(rooms);
 
 const app = express();
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
@@ -39,6 +45,9 @@ registerSocketHandlers(io, {
   selectRole,
   sendChatMessage,
   rateDancer,
+  startSongChallenge,
+  submitSongPhrase,
+  chooseSong,
   disconnectGraceMs: env.disconnectGraceMs,
 });
 

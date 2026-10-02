@@ -148,6 +148,9 @@ Socket.IO (path `/socket.io`):
 | client -> server | `battle:start` | `{ roomCode, requesterId, dancerIds? }` (host only) |
 | client -> server | `chat:message` | `{ roomCode, senderId, content }` |
 | client -> server | `rating:submit` | `{ roomCode, raterId, dancerId, score }` (spectators, 1-5) |
+| client -> server | `song-challenge:start` | `{ roomCode, requesterId }` (host only, needs 2+ dancers) - shows a random phrase with a countdown |
+| client -> server | `song-challenge:submit` | `{ roomCode, playerId, text }` (dancers in the challenge) - ack data `{ room, outcome: "accepted" \| "incorrect" \| "expired" }` |
+| client -> server | `song:choose` | `{ roomCode, playerId, songId }` (only the challenge winner) |
 | client -> server | `webrtc:ready` | `{ roomCode, playerId }` - the sender is ready to (re)negotiate its camera connections |
 | client -> server | `webrtc:signal` | `{ roomCode, from, to, negotiationId, description?, candidate? }` - SDP offer/answer or ICE candidate |
 | server -> client | `room:updated` | `Room` |
@@ -158,6 +161,8 @@ Socket.IO (path `/socket.io`):
 | server -> client | `webrtc:signal` | same payload as the client event, delivered only to the `to` player |
 
 Rooms hold at most 8 players. When the host starts the battle, two players become dancers and the rest spectate; the battle finishes automatically once every spectator has rated both dancers.
+
+**Song selection.** In the lobby the host starts a typing challenge: the server picks a random phrase, sets `room.songSelection` (phase `typing`, `challenge.phrase`, `challenge.expiresAt`) and broadcasts it. The first dancer who submits the exact phrase (case sensitive, surrounding spaces ignored) wins the right to pick the song (phase `choosing`). A misspelled submission is rejected and costs that player their chance for the round. When the countdown (`SONG_CHALLENGE_MS`, default 15 s) runs out, or every dancer misspelled it, the server passes the turn to a random dancer still in the room, preferring those who did not misspell. The chosen song is stored in `room.selectedSong` and copied to `battle.song` when the battle starts; the battle cannot start while a selection is in progress.
 
 The `webrtc:*` events are a thin signaling relay for the dancers' live cameras (media flows peer to peer, never through the server). The server only checks that the sender joined that room as `playerId`/`from` and that `to` is connected to the same room; otherwise the ack returns `{ ok: false }` and nothing is relayed. Each socket also joins a `player:<playerId>` channel on `room:join` so signals can target a single player.
 

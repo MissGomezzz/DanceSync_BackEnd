@@ -1,5 +1,6 @@
 import type { ChatMessage } from "../../domain/model/ChatMessage.js";
 import type { Room } from "../../domain/model/Room.js";
+import type { SubmitOutcome } from "../../domain/services/SongSelectionService.js";
 
 /** Events emitted by clients. */
 export const ClientEvents = {
@@ -11,6 +12,9 @@ export const ClientEvents = {
   WEBRTC_READY: "webrtc:ready",
   WEBRTC_SIGNAL: "webrtc:signal",
   ROLE_SELECT: "role:select",
+  SONG_CHALLENGE_START: "song-challenge:start",
+  SONG_CHALLENGE_SUBMIT: "song-challenge:submit",
+  SONG_CHOOSE: "song:choose",
 } as const;
 
 /** Events emitted by the server. */
@@ -45,6 +49,29 @@ export interface BattleStartPayload {
   roomCode: string;
   requesterId: string;
   dancerIds?: [string, string];
+}
+
+export interface SongChallengeStartPayload {
+  roomCode: string;
+  requesterId: string;
+}
+
+export interface SongChallengeSubmitPayload {
+  roomCode: string;
+  playerId: string;
+  text: string;
+}
+
+export interface SongChallengeSubmitResult {
+  room: Room;
+  /** accepted: won the right to choose; incorrect: misspelled; expired: sent after the countdown. */
+  outcome: SubmitOutcome;
+}
+
+export interface SongChoosePayload {
+  roomCode: string;
+  playerId: string;
+  songId: string;
 }
 
 export interface ChatMessagePayload {
@@ -113,6 +140,12 @@ export interface ClientToServerEvents {
   [ClientEvents.WEBRTC_READY]: (payload: WebRtcReadyPayload, ack?: Ack<null>) => void;
   [ClientEvents.WEBRTC_SIGNAL]: (payload: WebRtcSignalPayload, ack?: Ack<null>) => void;
   [ClientEvents.ROLE_SELECT]: (payload: RoleSelectPayload, ack?: Ack<Room>) => void;
+  [ClientEvents.SONG_CHALLENGE_START]: (payload: SongChallengeStartPayload, ack?: Ack<Room>) => void;
+  [ClientEvents.SONG_CHALLENGE_SUBMIT]: (
+    payload: SongChallengeSubmitPayload,
+    ack?: Ack<SongChallengeSubmitResult>,
+  ) => void;
+  [ClientEvents.SONG_CHOOSE]: (payload: SongChoosePayload, ack?: Ack<Room>) => void;
 }
 
 export interface ServerToClientEvents {

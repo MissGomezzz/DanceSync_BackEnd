@@ -4,6 +4,9 @@ import type { RateDancer } from "../../application/usecases/RateDancer.js";
 import type { SendChatMessage } from "../../application/usecases/SendChatMessage.js";
 import type { StartBattle } from "../../application/usecases/StartBattle.js";
 import type { SelectRole } from "../../application/usecases/SelectRole.js";
+import type { ChooseSong } from "../../application/usecases/ChooseSong.js";
+import type { StartSongChallenge } from "../../application/usecases/StartSongChallenge.js";
+import type { SubmitSongPhrase } from "../../application/usecases/SubmitSongPhrase.js";
 import { DomainError } from "../../domain/errors/DomainError.js";
 import {
   ClientEvents,
@@ -24,6 +27,9 @@ export interface SocketDependencies {
   sendChatMessage: SendChatMessage;
   rateDancer: RateDancer;
   selectRole: SelectRole;
+  startSongChallenge: StartSongChallenge;
+  submitSongPhrase: SubmitSongPhrase;
+  chooseSong: ChooseSong;
   /** Seat retention after a disconnect, see env.disconnectGraceMs. */
   disconnectGraceMs: number;
 }
@@ -64,6 +70,37 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const room = await deps.startBattle.execute(payload);
         io.to(room.code).emit(ServerEvents.BATTLE_STARTED, room);
+        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+        return room;
+      }),
+    );
+
+    socket.on(ClientEvents.SONG_CHALLENGE_START, (payload, ack) =>
+      guard(socket, ack, async () => {
+        const room = await deps.startSongChallenge.execute(payload);
+        const challenge = room.songSelection!.challenge;
+        // The server owns the countdown: when it runs out the round is resolved
+        // with the fallback rule even if no client submits anything.
+        const delay = Math.max(0, challenge.expiresAt.getTime() - Date.now());
+        setTimeout(() => void expireSongChallenge(io, deps, room.code, challenge.id), delay);
+        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+        return room;
+      }),
+    );
+
+    socket.on(ClientEvents.SONG_CHALLENGE_SUBMIT, (payload, ack) =>
+      guard(socket, ack, async () => {
+        requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
+        const result = await deps.submitSongPhrase.execute(payload);
+        io.to(result.room.code).emit(ServerEvents.ROOM_UPDATED, result.room);
+        return result;
+      }),
+    );
+
+    socket.on(ClientEvents.SONG_CHOOSE, (payload, ack) =>
+      guard(socket, ack, async () => {
+        requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
+        const room = await deps.chooseSong.execute(payload);
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
         return room;
       }),
@@ -118,6 +155,20 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       setTimeout(() => void releaseSeatIfAbandoned(io, deps, roomCode, playerId), deps.disconnectGraceMs);
     });
   });
+}
+
+async function expireSongChallenge(
+  io: BattleServer,
+  deps: SocketDependencies,
+  roomCode: string,
+  challengeId: string,
+): Promise<void> {
+  try {
+    const room = await deps.startSongChallenge.expire({ roomCode, challengeId });
+    if (room) io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+  } catch (error) {
+    console.error("Error expiring song challenge", error);
+  }
 }
 
 async function releaseSeatIfAbandoned(

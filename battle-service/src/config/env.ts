@@ -19,6 +19,8 @@ export const env = {
    * Covers page refreshes and transient network drops without closing the room.
    */
   disconnectGraceMs: readNumber("DISCONNECT_GRACE_MS", 15_000),
+  /** Time players have to type the phrase that grants the right to choose the song. */
+  songChallengeMs: readNumber("SONG_CHALLENGE_MS", 15_000),
 } as const;
 
 export type Env = typeof env;
