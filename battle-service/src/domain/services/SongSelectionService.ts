@@ -94,12 +94,15 @@ export const SongSelectionService = {
     if (!selection.participantIds.includes(playerId)) {
       throw new DomainError("NOT_CHALLENGE_PARTICIPANT", "Only dancers in this challenge can type the phrase");
     }
-    if (selection.failedIds.includes(playerId)) {
-      throw new DomainError("ATTEMPT_ALREADY_USED", "You already used your attempt in this challenge");
-    }
-
+    // Expiry is checked before the used-attempt rule: once the countdown is over
+    // every late submission resolves the round as timed out, including one from a
+    // dancer who already misspelled (they would otherwise get a misleading error
+    // and the round would wait for the server timer).
     if (now.getTime() >= selection.challenge.expiresAt.getTime()) {
       return { room: assignFallbackChooser(room, selection, "timeout", random), outcome: "expired" };
+    }
+    if (selection.failedIds.includes(playerId)) {
+      throw new DomainError("ATTEMPT_ALREADY_USED", "You already used your attempt in this challenge");
     }
 
     if (normalizeAttempt(text) === selection.challenge.phrase) {

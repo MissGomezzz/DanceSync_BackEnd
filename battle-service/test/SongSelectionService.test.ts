@@ -147,6 +147,16 @@ describe("Escenario 3: escritura incorrecta o tiempo agotado", () => {
     assert.equal(room.songSelection!.chooserReason, "timeout");
   });
 
+  it("reports expired, not a used attempt, when a dancer who misspelled submits after the countdown", () => {
+    const failedA = SongSelectionService.submit(started(), "a", "mal", at(1000)).room;
+    const { room, outcome } = SongSelectionService.submit(failedA, "a", "baila conmigo", at(DURATION + 1), first);
+    assert.equal(outcome, "expired");
+    assert.equal(room.songSelection!.phase, "choosing");
+    assert.equal(room.songSelection!.chooserReason, "timeout");
+    // The fallback still prefers the dancer who did not misspell.
+    assert.equal(room.songSelection!.chooserId, "b");
+  });
+
   it("al expirar, el turno pasa a un jugador que no falló", () => {
     const failedA = SongSelectionService.submit(started(), "a", "mal", at(1000)).room;
     const expired = SongSelectionService.expire(failedA, failedA.songSelection!.challenge.id, first)!;
