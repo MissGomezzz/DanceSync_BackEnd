@@ -329,18 +329,28 @@ function isNonEmptyString(value: unknown): value is string {
 /**
  * Runs a handler, replying through the ack callback when provided and emitting a
  * domain error event to the calling socket otherwise.
+ *
+ * The ack argument comes straight from the client: Socket.IO hands over whatever
+ * trailing argument was sent, so it is only called when it really is a function.
+ * The returned promise never rejects, because an unhandled rejection would stop
+ * the process and drop every room held in memory.
  */
 async function guard<T>(socket: BattleSocket, ack: Ack<T> | undefined, handler: () => Promise<T>): Promise<void> {
+  const reply: Ack<T> | undefined = typeof ack === "function" ? ack : undefined;
   try {
     const data = await handler();
-    ack?.({ ok: true, data });
+    reply?.({ ok: true, data });
   } catch (error) {
-    const payload =
-      error instanceof DomainError
-        ? { code: error.code, message: error.message }
-        : { code: "INTERNAL_ERROR", message: "Unexpected server error" };
-    if (!(error instanceof DomainError)) console.error("Unhandled socket error", error);
-    if (ack) ack({ ok: false, error: payload });
-    else socket.emit(ServerEvents.ERROR, payload);
+    try {
+      const payload =
+        error instanceof DomainError
+          ? { code: error.code, message: error.message }
+          : { code: "INTERNAL_ERROR", message: "Unexpected server error" };
+      if (!(error instanceof DomainError)) console.error("Unhandled socket error", error);
+      if (reply) reply({ ok: false, error: payload });
+      else socket.emit(ServerEvents.ERROR, payload);
+    } catch (replyError) {
+      console.error("Error reporting a socket error", replyError);
+    }
   }
 }

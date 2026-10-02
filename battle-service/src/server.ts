@@ -89,3 +89,16 @@ function shutdown(signal: string): void {
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+// Safety net: every handler and timer catches its own errors. If a rejected
+// promise ever slips through, log it instead of letting Node stop the process
+// (rooms live in memory, so a crash ends every battle in progress). A synchronous
+// uncaught exception may leave state half-updated, so that one is logged and the
+// process exits as Node recommends, to be restarted by its supervisor.
+process.on("unhandledRejection", (reason) => {
+  console.error("Unhandled promise rejection", reason);
+});
+process.on("uncaughtException", (error, origin) => {
+  console.error(`Uncaught exception (${origin}), exiting`, error);
+  process.exit(1);
+});
