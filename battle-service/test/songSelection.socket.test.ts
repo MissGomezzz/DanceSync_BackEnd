@@ -111,7 +111,7 @@ describe("Selección de canción por Socket.IO", () => {
   it("solo el anfitrión puede iniciar el reto", async () => {
     const { code, guest } = await lobbyWithTwoDancers();
     const response = await emit(guest, "song-challenge:start", { roomCode: code, requesterId: "guest" });
-    assert.equal(response.ok, false);
+    assert.equal(!response.ok && response.error.code, "NOT_HOST");
   });
 
   it("rechaza la frase mal escrita, acepta la correcta y el ganador elige la canción", async () => {

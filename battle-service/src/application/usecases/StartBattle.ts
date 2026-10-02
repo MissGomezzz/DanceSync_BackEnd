@@ -17,7 +17,7 @@ export class StartBattle {
     const room = await this.rooms.findByCode(input.roomCode);
     if (!room) throw new DomainError("ROOM_NOT_FOUND", `Room ${input.roomCode} does not exist`);
     if (room.hostId !== input.requesterId) {
-      throw new DomainError("INVALID_RATER", "Only the host can start the battle");
+      throw new DomainError("NOT_HOST", "Only the host can start the battle");
     }
     const updated = RoomService.startBattle(room, input.dancerIds);
     await this.rooms.save(updated);

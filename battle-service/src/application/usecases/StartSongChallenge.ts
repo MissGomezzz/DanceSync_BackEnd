@@ -29,7 +29,7 @@ export class StartSongChallenge {
   async execute(input: StartSongChallengeInput): Promise<Room> {
     const room = await this.requireRoom(input.roomCode);
     if (room.hostId !== input.requesterId) {
-      throw new DomainError("INVALID_RATER", "Only the host can start the song selection");
+      throw new DomainError("NOT_HOST", "Only the host can start the song selection");
     }
     const updated = SongSelectionService.start(room, this.options);
     await this.rooms.save(updated);
