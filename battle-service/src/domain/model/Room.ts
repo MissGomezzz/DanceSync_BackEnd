@@ -22,4 +22,9 @@ export interface Room {
   /** Song chosen through the challenge; the next battle is danced to it. */
   selectedSong: Song | null;
   createdAt: Date;
+  /**
+   * Optimistic concurrency version: 0 when created, +1 on every stored change
+   * (see RoomRepository.update). Clients may use it to discard stale updates.
+   */
+  version: number;
 }

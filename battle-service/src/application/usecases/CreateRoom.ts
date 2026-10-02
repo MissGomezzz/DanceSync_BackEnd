@@ -11,12 +11,11 @@ export class CreateRoom {
   constructor(private readonly rooms: RoomRepository) {}
 
   async execute(input: CreateRoomInput): Promise<Room> {
-    let room = RoomService.create({ id: input.hostId, displayName: input.displayName });
-    // Regenerate on the unlikely code collision.
-    while (await this.rooms.findByCode(room.code)) {
-      room = RoomService.create({ id: input.hostId, displayName: input.displayName });
+    // insert is atomic, so two rooms can never share a code; on the unlikely
+    // collision a new code is generated.
+    for (;;) {
+      const room = RoomService.create({ id: input.hostId, displayName: input.displayName });
+      if (await this.rooms.insert(room)) return room;
     }
-    await this.rooms.save(room);
-    return room;
   }
 }

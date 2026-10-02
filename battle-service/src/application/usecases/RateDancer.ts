@@ -1,7 +1,7 @@
-import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
 import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
 import { RoomService } from "../../domain/services/RoomService.js";
+import { updateRoom } from "../roomUpdates.js";
 
 export interface RateDancerInput {
   roomCode: string;
@@ -20,21 +20,18 @@ export class RateDancer {
   constructor(private readonly rooms: RoomRepository) {}
 
   async execute(input: RateDancerInput): Promise<RateDancerOutput> {
-    const room = await this.rooms.findByCode(input.roomCode);
-    if (!room) throw new DomainError("ROOM_NOT_FOUND", `Room ${input.roomCode} does not exist`);
-
-    let updated = RoomService.rate(room, {
-      raterId: input.raterId,
-      dancerId: input.dancerId,
-      score: input.score,
+    let finished = false;
+    const room = await updateRoom(this.rooms, input.roomCode, (current) => {
+      const rated = RoomService.rate(current, {
+        raterId: input.raterId,
+        dancerId: input.dancerId,
+        score: input.score,
+      });
+      // Decided on the latest state: of several concurrent ratings exactly the
+      // one that completes the set sees it and finishes the battle.
+      finished = RoomService.allRatingsSubmitted(rated);
+      return finished ? RoomService.finishBattle(rated) : rated;
     });
-
-    const finished = RoomService.allRatingsSubmitted(updated);
-    if (finished) {
-      updated = RoomService.finishBattle(updated);
-    }
-
-    await this.rooms.save(updated);
-    return { room: updated, finished };
+    return { room, finished };
   }
 }

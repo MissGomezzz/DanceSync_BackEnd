@@ -94,8 +94,7 @@ async function freshRepository(): Promise<WordRaceRepository> {
 }
 
 /**
- * DELIBERATELY BROKEN: the read -> decide -> save pattern the song challenge uses
- * today. Every caller can read "no winner yet" before any of them saves, so
+ * DELIBERATELY BROKEN: the plain read -> decide -> save pattern. Every caller can read "no winner yet" before any of them saves, so
  * several dancers are told they won (lost update). Kept only as a negative
  * control proving the concurrency test is able to catch this bug.
  */

@@ -1,7 +1,7 @@
-import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
 import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
 import { RoomService } from "../../domain/services/RoomService.js";
+import { updateRoom } from "../roomUpdates.js";
 
 export interface JoinRoomInput {
   roomCode: string;
@@ -29,34 +29,27 @@ export class JoinRoom {
   constructor(private readonly rooms: RoomRepository) {}
 
   async execute(input: JoinRoomInput): Promise<Room> {
-    const room = await this.requireRoom(input.roomCode);
-    // Idempotent rejoin: the host is added when the room is created and clients
-    // re-emit room:join after a page refresh. Returning the room unchanged lets
-    // the socket handler still join the channel and broadcast the current state,
-    // while RoomService.join stays a strict domain rule.
-    if (room.players.some((p) => p.id === input.playerId)) {
-      return room;
-    }
-    const updated = RoomService.join(room, { id: input.playerId, displayName: input.displayName });
-    await this.rooms.save(updated);
-    return updated;
+    return updateRoom(this.rooms, input.roomCode, (room) =>
+      // Idempotent rejoin: the host is added when the room is created and clients
+      // re-emit room:join after a page refresh. Returning the room unchanged lets
+      // the socket handler still join the channel and broadcast the current state,
+      // while RoomService.join stays a strict domain rule.
+      room.players.some((p) => p.id === input.playerId)
+        ? room
+        : RoomService.join(room, { id: input.playerId, displayName: input.displayName }),
+    );
   }
 
   async leave(input: LeaveRoomInput): Promise<LeaveRoomOutput> {
-    const room = await this.requireRoom(input.roomCode);
-    const updated = RoomService.leave(room, input.playerId);
-    const battleFinished = room.status === "battling" && updated.status === "finished";
-    if (updated.players.length === 0) {
-      await this.rooms.delete(room.code);
-      return { room: null, battleFinished };
-    }
-    await this.rooms.save(updated);
-    return { room: updated, battleFinished };
-  }
-
-  private async requireRoom(code: string): Promise<Room> {
-    const room = await this.rooms.findByCode(code);
-    if (!room) throw new DomainError("ROOM_NOT_FOUND", `Room ${code} does not exist`);
-    return room;
+    let battleFinished = false;
+    // Removing the last player deletes the room in the same atomic step, so a
+    // player joining at that moment either gets in first (and keeps the room
+    // alive) or finds it gone, never a seat in a room deleted right after.
+    const room = await this.rooms.update(input.roomCode, (current) => {
+      const updated = RoomService.leave(current, input.playerId);
+      battleFinished = current.status === "battling" && updated.status === "finished";
+      return updated.players.length === 0 ? null : updated;
+    });
+    return { room, battleFinished };
   }
 }

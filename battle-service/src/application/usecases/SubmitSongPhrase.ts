@@ -6,6 +6,7 @@ import {
   type RandomIndex,
   type SubmitOutcome,
 } from "../../domain/services/SongSelectionService.js";
+import { updateRoom } from "../roomUpdates.js";
 
 export interface SubmitSongPhraseInput {
   roomCode: string;
@@ -26,13 +27,19 @@ export class SubmitSongPhrase {
   ) {}
 
   async execute(input: SubmitSongPhraseInput): Promise<SubmitSongPhraseOutput> {
-    const room = await this.rooms.findByCode(input.roomCode);
-    if (!room) throw new DomainError("ROOM_NOT_FOUND", `Room ${input.roomCode} does not exist`);
     if (typeof input.text !== "string") {
       throw new DomainError("INVALID_MESSAGE", "The typed phrase must be text");
     }
-    const result = SongSelectionService.submit(room, input.playerId, input.text, this.clock(), this.random);
-    await this.rooms.save(result.room);
-    return result;
+    const now = this.clock();
+    let outcome: SubmitOutcome = "incorrect";
+    // The winner is decided on the latest stored state: of several simultaneous
+    // correct submissions only the first update still sees phase "typing"; the
+    // others run on "choosing" and are rejected with SONG_SELECTION_NOT_ACTIVE.
+    const room = await updateRoom(this.rooms, input.roomCode, (current) => {
+      const result = SongSelectionService.submit(current, input.playerId, input.text, now, this.random);
+      outcome = result.outcome;
+      return result.room;
+    });
+    return { room, outcome };
   }
 }

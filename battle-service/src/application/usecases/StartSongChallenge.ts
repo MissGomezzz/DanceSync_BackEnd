@@ -2,6 +2,7 @@ import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
 import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
 import { SongSelectionService, type RandomIndex } from "../../domain/services/SongSelectionService.js";
+import { updateRoom } from "../roomUpdates.js";
 
 export interface StartSongChallengeInput {
   roomCode: string;
@@ -27,28 +28,27 @@ export class StartSongChallenge {
   ) {}
 
   async execute(input: StartSongChallengeInput): Promise<Room> {
-    const room = await this.requireRoom(input.roomCode);
-    if (room.hostId !== input.requesterId) {
-      throw new DomainError("NOT_HOST", "Only the host can start the song selection");
-    }
-    const updated = SongSelectionService.start(room, this.options);
-    await this.rooms.save(updated);
-    return updated;
+    return updateRoom(this.rooms, input.roomCode, (room) => {
+      if (room.hostId !== input.requesterId) {
+        throw new DomainError("NOT_HOST", "Only the host can start the song selection");
+      }
+      return SongSelectionService.start(room, this.options);
+    });
   }
 
   /** Resolves a challenge whose countdown ran out. Returns null when there was nothing to expire. */
   async expire(input: ExpireSongChallengeInput): Promise<Room | null> {
-    const room = await this.rooms.findByCode(input.roomCode);
-    if (!room) return null;
-    const updated = SongSelectionService.expire(room, input.challengeId, this.options.random);
-    if (!updated) return null;
-    await this.rooms.save(updated);
-    return updated;
-  }
-
-  private async requireRoom(code: string): Promise<Room> {
-    const room = await this.rooms.findByCode(code);
-    if (!room) throw new DomainError("ROOM_NOT_FOUND", `Room ${code} does not exist`);
-    return room;
+    let expired = false;
+    try {
+      const room = await updateRoom(this.rooms, input.roomCode, (current) => {
+        const updated = SongSelectionService.expire(current, input.challengeId, this.options.random);
+        expired = updated !== null;
+        return updated ?? current;
+      });
+      return expired ? room : null;
+    } catch (error) {
+      if (error instanceof DomainError && error.code === "ROOM_NOT_FOUND") return null;
+      throw error;
+    }
   }
 }

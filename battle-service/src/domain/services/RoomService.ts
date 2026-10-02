@@ -32,6 +32,7 @@ export const RoomService = {
       songSelection: null,
       selectedSong: null,
       createdAt: new Date(),
+      version: 0,
     };
   },
 

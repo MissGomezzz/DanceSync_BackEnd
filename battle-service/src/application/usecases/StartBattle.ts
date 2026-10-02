@@ -2,6 +2,7 @@ import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
 import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
 import { RoomService } from "../../domain/services/RoomService.js";
+import { updateRoom } from "../roomUpdates.js";
 
 export interface StartBattleInput {
   roomCode: string;
@@ -15,13 +16,11 @@ export class StartBattle {
   constructor(private readonly rooms: RoomRepository) {}
 
   async execute(input: StartBattleInput): Promise<Room> {
-    const room = await this.rooms.findByCode(input.roomCode);
-    if (!room) throw new DomainError("ROOM_NOT_FOUND", `Room ${input.roomCode} does not exist`);
-    if (room.hostId !== input.requesterId) {
-      throw new DomainError("NOT_HOST", "Only the host can start the battle");
-    }
-    const updated = RoomService.startBattle(room, input.dancerIds);
-    await this.rooms.save(updated);
-    return updated;
+    return updateRoom(this.rooms, input.roomCode, (room) => {
+      if (room.hostId !== input.requesterId) {
+        throw new DomainError("NOT_HOST", "Only the host can start the battle");
+      }
+      return RoomService.startBattle(room, input.dancerIds);
+    });
   }
 }
