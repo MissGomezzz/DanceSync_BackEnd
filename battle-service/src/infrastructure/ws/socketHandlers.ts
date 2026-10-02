@@ -48,7 +48,80 @@ export interface WordRaceSocketDependencies {
   getActiveWordRound: GetActiveWordRound;
 }
 
-export function registerSocketHandlers(io: BattleServer, deps: SocketDependencies): void {
+/** Lets the owner stop every timer the handlers own (tests, graceful shutdown). */
+export interface SocketHandlersHandle {
+  close(): void;
+}
+
+export function registerSocketHandlers(io: BattleServer, deps: SocketDependencies): SocketHandlersHandle {
+  /**
+   * Pending seat releases after a disconnect, one per (room, player). A newer
+   * disconnect replaces the timer and a rejoin cancels it, so an old timer can
+   * never release a seat that a later reconnect renewed.
+   */
+  const graceTimers = new Map<string, NodeJS.Timeout>();
+
+  function cancelGrace(roomCode: string, playerId: string): void {
+    const key = seatKey(roomCode, playerId);
+    clearTimeout(graceTimers.get(key));
+    graceTimers.delete(key);
+  }
+
+  function scheduleGrace(roomCode: string, playerId: string): void {
+    cancelGrace(roomCode, playerId);
+    const key = seatKey(roomCode, playerId);
+    const timer = setTimeout(() => {
+      graceTimers.delete(key);
+      void releaseSeatIfAbandoned(roomCode, playerId);
+    }, deps.disconnectGraceMs);
+    timer.unref();
+    graceTimers.set(key, timer);
+  }
+
+  /**
+   * Detaches every local socket bound to (roomCode, playerId): it leaves the room
+   * and player channels and loses its binding, so a second tab of a player who
+   * left can no longer act (requireOwnSeat fails) nor receive the room's events.
+   */
+  async function unbindPlayer(roomCode: string, playerId: string): Promise<void> {
+    for (const socket of io.of("/").sockets.values()) {
+      const { roomCode: bound, playerId: boundPlayer } = socket.data;
+      if (!bound || boundPlayer !== playerId || bound.toUpperCase() !== roomCode.toUpperCase()) continue;
+      await unbindSocket(socket);
+    }
+  }
+
+  /** Single path for every departure: explicit leave, released seat or room switch. */
+  async function leaveRoom(roomCode: string, playerId: string): Promise<LeaveRoomOutput> {
+    const left = await deps.joinRoom.leave({ roomCode, playerId });
+    cancelGrace(roomCode, playerId);
+    await unbindPlayer(roomCode, playerId);
+    await announceLeave(io, deps, roomCode, left);
+    return left;
+  }
+
+  async function releaseSeatIfAbandoned(roomCode: string, playerId: string): Promise<void> {
+    try {
+      const sockets = await io.in(roomCode).fetchSockets();
+      if (sockets.some((s) => s.data.playerId === playerId)) return; // Player is back.
+      await leaveRoom(roomCode, playerId);
+    } catch (error) {
+      // The player may have left explicitly or the room may already be gone.
+      if (!(error instanceof DomainError)) console.error("Error releasing abandoned seat", error);
+    }
+  }
+
+  /** Joining as someone else or somewhere else first releases the seat bound so far. */
+  async function leavePreviousBinding(socket: BattleSocket, roomCode: string, playerId: string): Promise<void> {
+    try {
+      await leaveRoom(roomCode, playerId);
+    } catch (error) {
+      // Seat already released or room gone: only this socket's channels are left.
+      if (!(error instanceof DomainError)) throw error;
+    }
+    await unbindSocket(socket);
+  }
+
   io.on("connection", (socket) => {
     // room:join is the only event that binds an identity to the socket: every other
     // event must act as the player (and in the room) recorded here, see requireOwnSeat.
@@ -57,11 +130,26 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     socket.on(ClientEvents.ROOM_JOIN, (payload, ack) =>
       guard(socket, ack, async () => {
         // JoinRoom validates every field (INVALID_PLAYER / ROOM_NOT_FOUND).
-        const room = await deps.joinRoom.execute(payload ?? ({} as RoomJoinPayload));
-        socket.data.playerId = payload.playerId;
+        let room = await deps.joinRoom.execute(payload ?? ({} as RoomJoinPayload));
+        const playerId = payload.playerId;
+        const { roomCode: previousRoom, playerId: previousPlayer } = socket.data;
+        // The new seat is taken first, so a failed join leaves the old binding
+        // intact; only then is the old seat released, so the socket never keeps a
+        // ghost seat nor the old room's events.
+        if (
+          previousRoom &&
+          previousPlayer &&
+          (previousRoom.toUpperCase() !== room.code.toUpperCase() || previousPlayer !== playerId)
+        ) {
+          await leavePreviousBinding(socket, previousRoom, previousPlayer);
+          // Same room under a new identity: the departure changed it again.
+          if (previousRoom.toUpperCase() === room.code.toUpperCase()) room = await deps.joinRoom.execute(payload);
+        }
+        cancelGrace(room.code, playerId);
+        socket.data.playerId = playerId;
         socket.data.roomCode = room.code;
         await socket.join(room.code);
-        await socket.join(playerChannel(payload.playerId));
+        await socket.join(playerChannel(playerId));
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
         if (room.status === "battling") await resyncWordRound(socket, deps, room.code);
         return room;
@@ -80,10 +168,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     socket.on(ClientEvents.ROOM_LEAVE, (payload, ack) =>
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
-        const left = await deps.joinRoom.leave({ roomCode, playerId: payload.playerId });
-        await socket.leave(roomCode);
-        socket.data.roomCode = undefined;
-        await announceLeave(io, deps, roomCode, left);
+        const left = await leaveRoom(roomCode, payload.playerId);
         return left.room;
       }),
     );
@@ -196,9 +281,29 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       // A refresh or a transient network drop disconnects the socket too. Removing the
       // player immediately would delete a room whose only player is reloading the page,
       // so the seat is kept for a grace period and released only if nobody rejoined.
-      setTimeout(() => void releaseSeatIfAbandoned(io, deps, roomCode, playerId), deps.disconnectGraceMs);
+      scheduleGrace(roomCode, playerId);
     });
   });
+
+  return {
+    close() {
+      for (const timer of graceTimers.values()) clearTimeout(timer);
+      graceTimers.clear();
+    },
+  };
+}
+
+function seatKey(roomCode: string, playerId: string): string {
+  return `${roomCode.toUpperCase()}:${playerId}`;
+}
+
+/** Drops the socket's binding and its room and player channels. */
+async function unbindSocket(socket: BattleSocket): Promise<void> {
+  const { roomCode, playerId } = socket.data;
+  socket.data.roomCode = undefined;
+  socket.data.playerId = undefined;
+  if (roomCode) await socket.leave(roomCode);
+  if (playerId) await socket.leave(playerChannel(playerId));
 }
 
 async function expireSongChallenge(
@@ -212,22 +317,6 @@ async function expireSongChallenge(
     if (room) io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
   } catch (error) {
     console.error("Error expiring song challenge", error);
-  }
-}
-
-async function releaseSeatIfAbandoned(
-  io: BattleServer,
-  deps: SocketDependencies,
-  roomCode: string,
-  playerId: string,
-): Promise<void> {
-  try {
-    const sockets = await io.in(roomCode).fetchSockets();
-    if (sockets.some((s) => s.data.playerId === playerId)) return; // Player is back.
-    await announceLeave(io, deps, roomCode, await deps.joinRoom.leave({ roomCode, playerId }));
-  } catch (error) {
-    // The player may have left explicitly or the room may already be gone.
-    if (!(error instanceof DomainError)) console.error("Error releasing abandoned seat", error);
   }
 }
 

@@ -18,6 +18,7 @@ import {
   registerSocketHandlers,
   type BattleServer,
   type SocketDependencies,
+  type SocketHandlersHandle,
 } from "../../src/infrastructure/ws/socketHandlers.js";
 
 export type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
@@ -37,11 +38,12 @@ export class SocketHarness {
   io!: BattleServer;
   private url = "";
   private readonly clients: ClientSocket[] = [];
+  private handle: SocketHandlersHandle | undefined;
 
   async start(options: HarnessOptions = {}): Promise<this> {
     this.httpServer = createServer();
     this.io = new Server(this.httpServer, { path: "/socket.io" });
-    registerSocketHandlers(this.io, {
+    this.handle = registerSocketHandlers(this.io, {
       joinRoom: new JoinRoom(this.rooms),
       startBattle: new StartBattle(this.rooms),
       selectRole: new SelectRole(this.rooms),
@@ -60,6 +62,7 @@ export class SocketHarness {
 
   async stop(): Promise<void> {
     for (const socket of this.clients) socket.disconnect();
+    this.handle?.close();
     await this.io.close();
   }
 

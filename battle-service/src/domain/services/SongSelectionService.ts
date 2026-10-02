@@ -94,6 +94,10 @@ export const SongSelectionService = {
     if (!selection.participantIds.includes(playerId)) {
       throw new DomainError("NOT_CHALLENGE_PARTICIPANT", "Only dancers in this challenge can type the phrase");
     }
+    // Participants are snapshotted at the start; one who left since cannot play.
+    if (!isPresent(room, playerId)) {
+      throw new DomainError("PLAYER_NOT_IN_ROOM", `Player ${playerId} is not in room ${room.code}`);
+    }
     // Expiry is checked before the used-attempt rule: once the countdown is over
     // every late submission resolves the round as timed out, including one from a
     // dancer who already misspelled (they would otherwise get a misleading error
@@ -113,7 +117,11 @@ export const SongSelectionService = {
     }
 
     const failed: SongSelection = { ...selection, failedIds: [...selection.failedIds, playerId] };
-    const everyoneFailed = failed.participantIds.every((id) => failed.failedIds.includes(id));
+    // Only participants still in the room count: one who left can no longer type,
+    // so waiting for them would hold the round until the countdown runs out.
+    const everyoneFailed = failed.participantIds
+      .filter((id) => isPresent(room, id))
+      .every((id) => failed.failedIds.includes(id));
     return {
       room: everyoneFailed
         ? assignFallbackChooser(room, failed, "all-failed", random)
@@ -158,6 +166,10 @@ export const SongSelectionService = {
   },
 };
 
+function isPresent(room: Room, playerId: string): boolean {
+  return room.players.some((p) => p.id === playerId);
+}
+
 function requireTyping(room: Room): SongSelection {
   const selection = room.songSelection;
   if (!selection || selection.phase !== "typing") {
@@ -178,7 +190,7 @@ function assignFallbackChooser(
   reason: ChooserReason,
   random: RandomIndex,
 ): Room {
-  const present = selection.participantIds.filter((id) => room.players.some((p) => p.id === id));
+  const present = selection.participantIds.filter((id) => isPresent(room, id));
   const notFailed = present.filter((id) => !selection.failedIds.includes(id));
   const candidates = notFailed.length > 0 ? notFailed : present;
   if (candidates.length === 0) {

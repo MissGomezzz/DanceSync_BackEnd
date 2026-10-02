@@ -183,6 +183,24 @@ describe("Escenario 3: escritura incorrecta o tiempo agotado", () => {
     assert.equal(left.songSelection!.chooserReason, "chooser-left");
   });
 
+  it("a participant who left the room can no longer type the phrase", () => {
+    const room = RoomService.leave(started(), "a");
+    assertDomainError(() => SongSelectionService.submit(room, "a", "baila conmigo", at(1)), "PLAYER_NOT_IN_ROOM");
+  });
+
+  it("everyone failed counts only the participants still in the room", () => {
+    let room = RoomService.join(lobby(), { id: "c", displayName: "C" });
+    room = RoomService.selectRole(room, "c", "dancer");
+    room = SongSelectionService.start(room, { now: T0, durationMs: DURATION, random: first, phrases: PHRASES });
+    room = SongSelectionService.submit(room, "a", "mal", at(1000)).room;
+    room = RoomService.leave(room, "c");
+    // b is the last participant still here: their miss resolves the round at once.
+    room = SongSelectionService.submit(room, "b", "mal", at(2000), last).room;
+    assert.equal(room.songSelection!.phase, "choosing");
+    assert.equal(room.songSelection!.chooserReason, "all-failed");
+    assert.ok(["a", "b"].includes(room.songSelection!.chooserId!));
+  });
+
   it("al expirar sin participantes en la sala, la selección se cancela", () => {
     let room = started();
     room = RoomService.leave(RoomService.leave(room, "a"), "b");
