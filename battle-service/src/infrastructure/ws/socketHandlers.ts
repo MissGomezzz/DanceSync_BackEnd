@@ -49,6 +49,10 @@ export interface WordRaceSocketDependencies {
 
 export function registerSocketHandlers(io: BattleServer, deps: SocketDependencies): void {
   io.on("connection", (socket) => {
+    // room:join is the only event that binds an identity to the socket: every other
+    // event must act as the player (and in the room) recorded here, see requireOwnSeat.
+    // Authentication is mocked for now, so the playerId is taken from the payload;
+    // once Azure Entra ID is wired it will come from the validated token instead.
     socket.on(ClientEvents.ROOM_JOIN, (payload, ack) =>
       guard(socket, ack, async () => {
         const room = await deps.joinRoom.execute(payload);
@@ -64,7 +68,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
     socket.on(ClientEvents.ROLE_SELECT, (payload, ack) =>
       guard(socket, ack, async () => {
-        const room = await deps.selectRole.execute(payload);
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
+        const room = await deps.selectRole.execute({ ...payload, roomCode });
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
         return room;
       }),
@@ -72,18 +77,20 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
     socket.on(ClientEvents.ROOM_LEAVE, (payload, ack) =>
       guard(socket, ack, async () => {
-        const room = await deps.joinRoom.leave(payload);
-        await socket.leave(payload.roomCode);
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
+        const room = await deps.joinRoom.leave({ roomCode, playerId: payload.playerId });
+        await socket.leave(roomCode);
         socket.data.roomCode = undefined;
         if (room) io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        await stopWordRaceUnlessBattling(deps, payload.roomCode, room);
+        await stopWordRaceUnlessBattling(deps, roomCode, room);
         return room;
       }),
     );
 
     socket.on(ClientEvents.BATTLE_START, (payload, ack) =>
       guard(socket, ack, async () => {
-        const room = await deps.startBattle.execute(payload);
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
+        const room = await deps.startBattle.execute({ ...payload, roomCode });
         io.to(room.code).emit(ServerEvents.BATTLE_STARTED, room);
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
         // The battle already started; a failure planning the word race must not undo it.
@@ -110,7 +117,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
     socket.on(ClientEvents.SONG_CHALLENGE_START, (payload, ack) =>
       guard(socket, ack, async () => {
-        const room = await deps.startSongChallenge.execute(payload);
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
+        const room = await deps.startSongChallenge.execute({ ...payload, roomCode });
         const challenge = room.songSelection!.challenge;
         // The server owns the countdown: when it runs out the round is resolved
         // with the fallback rule even if no client submits anything.
@@ -123,8 +131,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
     socket.on(ClientEvents.SONG_CHALLENGE_SUBMIT, (payload, ack) =>
       guard(socket, ack, async () => {
-        requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
-        const result = await deps.submitSongPhrase.execute(payload);
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
+        const result = await deps.submitSongPhrase.execute({ ...payload, roomCode });
         io.to(result.room.code).emit(ServerEvents.ROOM_UPDATED, result.room);
         return result;
       }),
@@ -132,8 +140,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
     socket.on(ClientEvents.SONG_CHOOSE, (payload, ack) =>
       guard(socket, ack, async () => {
-        requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
-        const room = await deps.chooseSong.execute(payload);
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
+        const room = await deps.chooseSong.execute({ ...payload, roomCode });
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
         return room;
       }),
@@ -141,7 +149,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
     socket.on(ClientEvents.CHAT_MESSAGE, (payload, ack) =>
       guard(socket, ack, async () => {
-        const message = await deps.sendChatMessage.execute(payload);
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.senderId);
+        const message = await deps.sendChatMessage.execute({ ...payload, roomCode });
         io.to(message.roomCode).emit(ServerEvents.CHAT_MESSAGE, message);
         return message;
       }),
@@ -149,7 +158,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
     socket.on(ClientEvents.RATING_SUBMIT, (payload, ack) =>
       guard(socket, ack, async () => {
-        const { room, finished } = await deps.rateDancer.execute(payload);
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.raterId);
+        const { room, finished } = await deps.rateDancer.execute({ ...payload, roomCode });
         io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
         if (finished) {
           io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, room);
@@ -247,12 +257,21 @@ function playerChannel(playerId: string): string {
 }
 
 /**
- * Ensures the socket joined `roomCode` as `playerId`, so a client can neither
- * signal into a room it is not in nor impersonate another player.
+ * Ensures the socket joined `roomCode` as `playerId` (the identity bound by
+ * room:join), so a client can neither act in a room it is not in nor
+ * impersonate another player: kick them, start as the host, chat or rate as
+ * them. Room codes are case-insensitive, like the repository lookup. Returns
+ * the canonical code of the joined room.
  */
 function requireOwnSeat(socket: BattleSocket, roomCode: unknown, playerId: unknown): string {
   const { roomCode: joinedRoom, playerId: joinedPlayer } = socket.data;
-  if (!joinedRoom || !joinedPlayer || roomCode !== joinedRoom || playerId !== joinedPlayer) {
+  if (
+    !joinedRoom ||
+    !joinedPlayer ||
+    typeof roomCode !== "string" ||
+    roomCode.toUpperCase() !== joinedRoom.toUpperCase() ||
+    playerId !== joinedPlayer
+  ) {
     throw new DomainError("PLAYER_NOT_IN_ROOM", "The socket has not joined this room as this player");
   }
   return joinedRoom;
