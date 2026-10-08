@@ -1,0 +1,48 @@
+name: Deploy API Gateway
+
+on:
+  push:
+    branches:
+      - main
+      - deploy/azure
+    paths:
+      - 'api-gateway/**'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'api-gateway/**'
+  workflow_dispatch:
+
+env:
+  ACR_NAME: acrdancesyncsa33
+  RG_NAME: rg-dancesync
+  APP_NAME: api-gateway
+  IMAGE_NAME: acrdancesyncsa33.azurecr.io/api-gateway
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Autenticación en Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Iniciar sesión en Azure Container Registry
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      - name: Construir imagen de Docker
+        run: |
+          docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} ./api-gateway
+          docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+      - name: Actualizar Azure Container App
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          resourceGroup: ${{ env.RG_NAME }}
+          containerAppName: ${{ env.APP_NAME }}
+          imageToDeploy: ${{ env.IMAGE_NAME }}:${{ github.sha }}
