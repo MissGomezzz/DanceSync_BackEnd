@@ -1,0 +1,20 @@
+name: Deploy api-gateway
+
+on:
+  push:
+    branches: [deploy/azure]
+    paths:
+      - 'api-gateway/**'
+      - '.github/workflows/_deploy-service.yml'
+      - '.github/workflows/deploy-api-gateway.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/_deploy-service.yml
+    with:
+      service: api-gateway
+    secrets: inherit

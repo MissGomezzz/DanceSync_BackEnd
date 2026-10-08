@@ -62,3 +62,5 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+
+# comentario de prueba para pipeline
