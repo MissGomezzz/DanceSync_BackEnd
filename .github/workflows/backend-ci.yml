@@ -1,0 +1,124 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+
+  api-gateway:
+    name: API Gateway CI
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: api-gateway
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Make Maven wrapper executable
+        run: chmod +x mvnw
+
+      - name: Test and build
+        run: ./mvnw -B verify
+
+
+  users-service:
+    name: Users Service CI
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: users-service
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: dancesync
+          POSTGRES_USER: dancesync
+          POSTGRES_PASSWORD: dancesync
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dancesync -d dancesync"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: dancesync
+      POSTGRES_USER: dancesync
+      POSTGRES_PASSWORD: dancesync
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: Make Maven wrapper executable
+        run: chmod +x mvnw
+
+      - name: Test and build
+        run: ./mvnw -B verify
+
+
+  battle-service:
+    name: Battle Service CI
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: battle-service
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.2
+          cache: pnpm
+          cache-dependency-path: battle-service/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Run tests
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
