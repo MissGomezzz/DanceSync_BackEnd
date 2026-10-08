@@ -13,6 +13,7 @@ export const ClientEvents = {
   WEBRTC_READY: "webrtc:ready",
   WEBRTC_SIGNAL: "webrtc:signal",
   ROLE_SELECT: "role:select",
+  PLAYER_READY: "player:ready",
   SONG_CHALLENGE_START: "song-challenge:start",
   SONG_CHALLENGE_SUBMIT: "song-challenge:submit",
   SONG_CHOOSE: "song:choose",
@@ -47,6 +48,13 @@ export interface RoleSelectPayload {
   roomCode: string;
   playerId: string;
   role: "dancer" | "spectator";
+}
+
+/** Marks the player as ready (true) or not ready (false) while the room is waiting. */
+export interface PlayerReadyPayload {
+  roomCode: string;
+  playerId: string;
+  ready: boolean;
 }
 
 export interface BattleStartPayload {
@@ -163,6 +171,8 @@ export interface WordRoundEndedPayload {
   reason: "won" | "expired";
   /** Rounds won so far per dancer. */
   wins: Record<string, number>;
+  /** Bonus points the winner earned for this round; 0 when nobody won it. */
+  bonusPoints: number;
 }
 
 export interface DomainErrorPayload {
@@ -182,6 +192,7 @@ export interface ClientToServerEvents {
   [ClientEvents.WEBRTC_READY]: (payload: WebRtcReadyPayload, ack?: Ack<null>) => void;
   [ClientEvents.WEBRTC_SIGNAL]: (payload: WebRtcSignalPayload, ack?: Ack<null>) => void;
   [ClientEvents.ROLE_SELECT]: (payload: RoleSelectPayload, ack?: Ack<Room>) => void;
+  [ClientEvents.PLAYER_READY]: (payload: PlayerReadyPayload, ack?: Ack<Room>) => void;
   [ClientEvents.SONG_CHALLENGE_START]: (payload: SongChallengeStartPayload, ack?: Ack<Room>) => void;
   [ClientEvents.SONG_CHALLENGE_SUBMIT]: (
     payload: SongChallengeSubmitPayload,

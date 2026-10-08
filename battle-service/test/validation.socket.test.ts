@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
 import type { Room } from "../src/domain/model/Room.js";
 import { ok, record, rejected, SocketHarness, waitUntil } from "./support/socketHarness.js";
+import { pickSong, readyUp } from "./support/ready.js";
 
 const harness = new SocketHarness();
 
@@ -60,6 +61,8 @@ describe("Client payload validation over Socket.IO", () => {
     assert.equal(stored.status, "waiting");
     assert.ok(stored.players.every((p) => p.role === "undecided"));
 
+    await readyUp(code, { host, guest });
+    await pickSong(harness.rooms, code);
     const room = await ok<Room>(host, "battle:start", { roomCode: code, requesterId: "host", dancerIds: ["host", "guest"] });
     assert.equal(room.status, "battling");
   });

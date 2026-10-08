@@ -10,4 +10,6 @@ export interface Player {
   id: string;
   displayName: string;
   role: PlayerRole;
+  /** Marked "ready to dance" in the lobby; toggled by the player until the battle starts. */
+  ready: boolean;
 }

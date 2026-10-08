@@ -9,6 +9,7 @@ import { CreateRoom } from "../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
 import { RateDancer } from "../src/application/usecases/RateDancer.js";
 import { SelectRole } from "../src/application/usecases/SelectRole.js";
+import { SetReady } from "../src/application/usecases/SetReady.js";
 import { SendChatMessage } from "../src/application/usecases/SendChatMessage.js";
 import { StartBattle } from "../src/application/usecases/StartBattle.js";
 import { StartSongChallenge } from "../src/application/usecases/StartSongChallenge.js";
@@ -16,6 +17,7 @@ import { SubmitSongPhrase } from "../src/application/usecases/SubmitSongPhrase.j
 import type { Room } from "../src/domain/model/Room.js";
 import { InMemoryRoomRepository } from "../src/infrastructure/persistence/InMemoryRoomRepository.js";
 import { registerSocketHandlers, type BattleServer } from "../src/infrastructure/ws/socketHandlers.js";
+import { readyUp } from "./support/ready.js";
 
 const PHRASE = "dale play";
 const CHALLENGE_MS = 400;
@@ -69,6 +71,7 @@ async function lobbyWithTwoDancers(): Promise<{ code: string; host: ClientSocket
   await ok(guest, "room:join", { roomCode: created.code, playerId: "guest", displayName: "Guest" });
   await ok(host, "role:select", { roomCode: created.code, playerId: "host", role: "dancer" });
   await ok(guest, "role:select", { roomCode: created.code, playerId: "guest", role: "dancer" });
+  await readyUp(created.code, { host, guest });
   return { code: created.code, host, guest };
 }
 
@@ -81,6 +84,7 @@ before(async () => {
     joinRoom: new JoinRoom(rooms),
     startBattle: new StartBattle(rooms),
     selectRole: new SelectRole(rooms),
+    setReady: new SetReady(rooms),
     sendChatMessage: new SendChatMessage(rooms),
     rateDancer: new RateDancer(rooms),
     startSongChallenge: new StartSongChallenge(rooms, { durationMs: CHALLENGE_MS, phrases: [PHRASE] }),
@@ -130,12 +134,14 @@ describe("Selección de canción por Socket.IO", () => {
     assert.equal(notChooser.ok, false);
     assert.equal(!notChooser.ok && notChooser.error.code, "NOT_SONG_CHOOSER");
 
+    // Choosing the song is the last step of the lobby flow: it starts the battle.
+    const hostSeesBattle = nextRoomUpdate(host, (r) => r.status === "battling");
     const chosen = await ok<WireRoom>(guest, "song:choose", { roomCode: code, playerId: "guest", songId: "song-3" });
     assert.equal(chosen.selectedSong?.id, "song-3");
     assert.equal(chosen.songSelection!.phase, "done");
-
-    const battle = await ok<WireRoom>(host, "battle:start", { roomCode: code, requesterId: "host" });
-    assert.equal(battle.battle?.song?.id, "song-3");
+    assert.equal(chosen.status, "battling");
+    assert.equal(chosen.battle?.song?.id, "song-3");
+    assert.equal((await hostSeesBattle).battle?.song?.id, "song-3");
   });
 
   it("cuando el temporizador llega a cero el servidor pasa el turno con la lógica predefinida", async () => {

@@ -4,6 +4,7 @@ import type { Battle, BattleResult } from "../model/Battle.js";
 import { MAX_DISPLAY_NAME_LENGTH, MAX_PLAYER_ID_LENGTH, type Player, type PlayerRole } from "../model/Player.js";
 import { MAX_SCORE, MIN_SCORE, type Rating } from "../model/Rating.js";
 import { MAX_PLAYERS, MIN_DANCERS_PER_BATTLE, type Room } from "../model/Room.js";
+import { requireEveryoneReady } from "./readiness.js";
 import { isSelectionInProgress, SongSelectionService } from "./SongSelectionService.js";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -25,7 +26,7 @@ export function generateRoomCode(): string {
  * rejected rather than trimmed into a different id. The display name is trimmed
  * and must keep 1-32 characters.
  */
-export function validatePlayer(id: unknown, displayName: unknown): Omit<Player, "role"> {
+export function validatePlayer(id: unknown, displayName: unknown): Omit<Player, "role" | "ready"> {
   if (typeof id !== "string" || id.length === 0 || id.length > MAX_PLAYER_ID_LENGTH || id.trim() !== id) {
     throw new DomainError(
       "INVALID_PLAYER",
@@ -50,8 +51,8 @@ export function requireRoomCode(code: unknown): string {
 const PLAYABLE_ROLES: readonly string[] = ["dancer", "spectator"] satisfies PlayerRole[];
 
 export const RoomService = {
-  create(host: Omit<Player, "role">, code: string = generateRoomCode()): Room {
-    const hostPlayer: Player = { ...validatePlayer(host.id, host.displayName), role: "undecided" };
+  create(host: Omit<Player, "role" | "ready">, code: string = generateRoomCode()): Room {
+    const hostPlayer: Player = { ...validatePlayer(host.id, host.displayName), role: "undecided", ready: false };
     return {
       code,
       hostId: hostPlayer.id,
@@ -67,7 +68,7 @@ export const RoomService = {
     };
   },
 
-  join(room: Room, player: Omit<Player, "role">): Room {
+  join(room: Room, player: Omit<Player, "role" | "ready">): Room {
     if (room.status !== "waiting") {
       throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} is not accepting players`);
     }
@@ -77,7 +78,7 @@ export const RoomService = {
     if (room.players.length >= MAX_PLAYERS) {
       throw new DomainError("ROOM_FULL", `Room ${room.code} already has ${MAX_PLAYERS} players`);
     }
-    const joined: Player = { ...validatePlayer(player.id, player.displayName), role: "undecided" };
+    const joined: Player = { ...validatePlayer(player.id, player.displayName), role: "undecided", ready: false };
     return { ...room, players: [...room.players, joined] };
   },
 
@@ -94,6 +95,30 @@ export const RoomService = {
       throw new DomainError("PLAYER_NOT_IN_ROOM", `Player ${playerId} is not in room ${room.code}`);
     }
     const players = room.players.map((p) => (p.id === playerId ? { ...p, role } : p));
+    return {
+      ...room,
+      players,
+      spectators: players.filter((p) => p.role === "spectator"),
+    };
+  },
+
+  /**
+   * Marks a player as ready (or not ready) to dance. Setting the state a player
+   * already has is accepted and changes nothing, so a repeated or retried
+   * request never flips the state back.
+   */
+  setReady(room: Room, playerId: string, ready: boolean): Room {
+    // Clients send the flag over the wire: check it at runtime, not only in the type.
+    if (typeof ready !== "boolean") {
+      throw new DomainError("INVALID_MESSAGE", "ready must be true or false");
+    }
+    if (room.status !== "waiting") {
+      throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} is not accepting ready changes`);
+    }
+    if (!room.players.some((p) => p.id === playerId)) {
+      throw new DomainError("PLAYER_NOT_IN_ROOM", `Player ${playerId} is not in room ${room.code}`);
+    }
+    const players = room.players.map((p) => (p.id === playerId ? { ...p, ready } : p));
     return {
       ...room,
       players,
@@ -128,7 +153,9 @@ export const RoomService = {
   /**
    * Starts a battle using whoever currently has role "dancer" (chosen via
    * selectRole), unless explicit dancerIds are given. Anyone still
-   * "undecided" at this point becomes a spectator by default.
+   * "undecided" at this point becomes a spectator by default. Every player in
+   * the room must have marked themselves ready (setReady) and the song must
+   * already be chosen (SongSelectionService).
    */
   startBattle(room: Room, dancerIds?: string[]): Room {
     if (room.status !== "waiting") {
@@ -156,6 +183,11 @@ export const RoomService = {
       throw new DomainError("INVALID_DANCER", "Selected dancers must be players in the room");
     }
 
+    requireEveryoneReady(room);
+    if (!room.selectedSong) {
+      throw new DomainError("SONG_NOT_SELECTED", "Choose the song before starting the battle");
+    }
+
     const dancers = selected.map((p) => ({ ...p!, role: "dancer" as const }));
     const players = room.players.map((p) => {
       const isDancer = dancers.some((d) => d.id === p.id);
@@ -167,6 +199,7 @@ export const RoomService = {
       dancerIds: dancers.map((d) => d.id),
       song: room.selectedSong,
       ratings: [],
+      bonusPoints: Object.fromEntries(dancers.map((d) => [d.id, 0])),
       startedAt: new Date(),
       finishedAt: null,
       result: null,
@@ -178,6 +211,28 @@ export const RoomService = {
       spectators: players.filter((p) => p.role === "spectator"),
       status: "battling",
       battle,
+    };
+  },
+
+  /**
+   * Adds the bonus for a word round won by `playerId`. Only a dancer of the
+   * battle in progress earns it; a bonus for a dancer who already left, or after
+   * the battle finished, is refused so it can never change a closed result.
+   */
+  awardWordBonus(room: Room, playerId: string, points: number): Room {
+    if (room.status !== "battling" || !room.battle) {
+      throw new DomainError("ROOM_NOT_BATTLING", `Room ${room.code} has no battle in progress`);
+    }
+    if (!room.battle.dancerIds.includes(playerId)) {
+      throw new DomainError("INVALID_DANCER", `Player ${playerId} is not dancing in this battle`);
+    }
+    if (!Number.isInteger(points) || points <= 0) {
+      throw new DomainError("INVALID_SCORE", "The bonus must be a positive whole number of points");
+    }
+    const current = room.battle.bonusPoints[playerId] ?? 0;
+    return {
+      ...room,
+      battle: { ...room.battle, bonusPoints: { ...room.battle.bonusPoints, [playerId]: current + points } },
     };
   },
 
@@ -221,9 +276,9 @@ export const RoomService = {
   },
 
   /**
-   * TODO(scoring-HU): winner-by-score with a proper tie-break (mid-song bonuses)
-   * is a separate HU. For now: highest total score wins; more than one leader
-   * at the top score is reported as a draw (winnerId: null).
+   * TODO(scoring-HU): a proper tie-break is a separate HU. For now: the highest
+   * total (spectators' ratings plus the word race bonus) wins; more than one
+   * leader at the top score is reported as a draw (winnerId: null).
    *
    * Only dancers still in the battle (battle.dancerIds) are scored. Ratings a
    * dancer received before leaving stay in battle.ratings as history but do not
@@ -238,6 +293,7 @@ export const RoomService = {
     for (const rating of room.battle.ratings) {
       if (room.battle.dancerIds.includes(rating.dancerId)) scores[rating.dancerId] += rating.score;
     }
+    for (const dancerId of room.battle.dancerIds) scores[dancerId] += room.battle.bonusPoints[dancerId] ?? 0;
     const maxScore = Math.max(...Object.values(scores));
     const leaders = room.battle.dancerIds.filter((id) => scores[id] === maxScore);
     const result: BattleResult = { scores, winnerId: leaders.length === 1 ? leaders[0] : null };

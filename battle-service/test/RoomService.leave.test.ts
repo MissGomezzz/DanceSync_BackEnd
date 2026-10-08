@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { DomainError } from "../src/domain/errors/DomainError.js";
 import type { Room } from "../src/domain/model/Room.js";
 import { RoomService } from "../src/domain/services/RoomService.js";
+import { startable } from "./support/ready.js";
 
 function assertDomainError(fn: () => unknown, code: string): void {
   assert.throws(fn, (error: unknown) => error instanceof DomainError && error.code === code);
@@ -15,7 +16,7 @@ function battle(dancers: string[], spectators: string[]): Room {
   for (const id of others) room = RoomService.join(room, { id, displayName: id.toUpperCase() });
   for (const id of dancers) room = RoomService.selectRole(room, id, "dancer");
   for (const id of spectators) room = RoomService.selectRole(room, id, "spectator");
-  return RoomService.startBattle(room);
+  return RoomService.startBattle(startable(room));
 }
 
 function rate(room: Room, raterId: string, dancerId: string, score: number): Room {

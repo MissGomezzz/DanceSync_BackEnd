@@ -4,6 +4,7 @@ import { after, before, describe, it } from "node:test";
 import type { Socket as ClientSocket } from "socket.io-client";
 import type { Room } from "../src/domain/model/Room.js";
 import { emit, ok, record, SocketHarness, waitUntil } from "./support/socketHarness.js";
+import { pickSong, readyUp } from "./support/ready.js";
 
 /**
  * Socket.IO dispatches the events of one socket through process.nextTick, so
@@ -26,6 +27,8 @@ async function battle(
     await ok(sockets[id], "room:join", { roomCode: code, playerId: id, displayName: id });
     await ok(sockets[id], "role:select", { roomCode: code, playerId: id, role: dancers.includes(id) ? "dancer" : "spectator" });
   }
+  await readyUp(code, sockets);
+  await pickSong(harness.rooms, code);
   const finished = record<Room>(sockets[dancers[0]], "battle:finished");
   await ok(sockets[dancers[0]], "battle:start", { roomCode: code, requesterId: dancers[0] });
   return { code, sockets, finished };
@@ -86,6 +89,8 @@ describe("Room concurrency over Socket.IO", () => {
     await ok(host, "room:join", { roomCode: code, playerId: "host", displayName: "Host" });
     await ok(guest, "room:join", { roomCode: code, playerId: "guest", displayName: "Guest" });
     await ok(guest, "role:select", { roomCode: code, playerId: "guest", role: "dancer" });
+    await readyUp(code, { host, guest });
+    await pickSong(harness.rooms, code);
 
     const [role, start] = await Promise.all([
       emit<Room>(host, "role:select", { roomCode: code, playerId: "host", role: "dancer" }),

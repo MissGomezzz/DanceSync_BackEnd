@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { DomainError } from "../src/domain/errors/DomainError.js";
 import { RoomService, requireRoomCode, validatePlayer } from "../src/domain/services/RoomService.js";
+import { startable } from "./support/ready.js";
 
 function assertDomainError(fn: () => unknown, code: string): void {
   assert.throws(fn, (error: unknown) => error instanceof DomainError && error.code === code);
@@ -50,6 +51,6 @@ describe("Client input validation in the domain", () => {
     for (const dancerIds of ["host,guest", [1, 2], ["host", 2], { 0: "host", 1: "guest" }]) {
       assertDomainError(() => RoomService.startBattle(room, dancerIds as string[]), "INVALID_DANCER");
     }
-    assert.equal(RoomService.startBattle(room, ["host", "guest"]).status, "battling");
+    assert.equal(RoomService.startBattle(startable(room), ["host", "guest"]).status, "battling");
   });
 });

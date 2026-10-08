@@ -10,6 +10,7 @@ import type { RoomMutation, RoomRepository } from "../src/domain/ports/RoomRepos
 import { RoomService } from "../src/domain/services/RoomService.js";
 import { SongSelectionService } from "../src/domain/services/SongSelectionService.js";
 import { InMemoryRoomRepository } from "../src/infrastructure/persistence/InMemoryRoomRepository.js";
+import { SONG_CATALOG } from "../src/domain/catalog/songs.js";
 
 /**
  * Concurrency proofs for the Room aggregate (optimistic versioning).
@@ -107,7 +108,7 @@ const PHRASE = "dale play";
 const ITERATIONS = 10;
 
 function player(id: string, role: Player["role"]): Player {
-  return { id, displayName: id, role };
+  return { id, displayName: id, role, ready: true };
 }
 
 /**
@@ -118,6 +119,7 @@ function crowdedRoom(dancers: string[], spectators: string[]): Room {
   const room = RoomService.create({ id: dancers[0], displayName: dancers[0] }, CODE);
   return {
     ...room,
+    selectedSong: SONG_CATALOG[0],
     players: [...dancers.map((id) => player(id, "dancer")), ...spectators.map((id) => player(id, "spectator"))],
   };
 }

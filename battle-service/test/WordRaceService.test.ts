@@ -4,6 +4,7 @@ import { DomainError } from "../src/domain/errors/DomainError.js";
 import type { Room } from "../src/domain/model/Room.js";
 import type { WordRound } from "../src/domain/model/WordRace.js";
 import { RoomService } from "../src/domain/services/RoomService.js";
+import { startable } from "./support/ready.js";
 import type { RandomIndex } from "../src/domain/services/SongSelectionService.js";
 import { WordRaceService } from "../src/domain/services/WordRaceService.js";
 
@@ -26,9 +27,10 @@ function battling(durationSeconds: number | null = null): Room {
   room = RoomService.selectRole(room, "a", "dancer");
   room = RoomService.selectRole(room, "b", "dancer");
   room = RoomService.selectRole(room, "s", "spectator");
-  room = RoomService.startBattle(room);
-  if (durationSeconds === null) return room;
-  return { ...room, battle: { ...room.battle!, song: { id: "x", title: "X", artist: "Y", durationSeconds } } };
+  room = RoomService.startBattle(startable(room));
+  // The timeline tests choose the song length themselves (or none).
+  const song = durationSeconds === null ? null : { id: "x", title: "X", artist: "Y", durationSeconds };
+  return { ...room, battle: { ...room.battle!, song } };
 }
 
 function offsets(room: Room, rounds: WordRound[]): number[] {
