@@ -2,7 +2,7 @@ name: Deploy battle-service
 
 on:
   push:
-    branches: [main]
+    branches: [deploy/azure]
     paths:
       - 'battle-service/**'
       - '.github/workflows/_deploy-service.yml'
