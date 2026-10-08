@@ -7,6 +7,7 @@ on:
       - deploy/azure
     paths:
       - 'api-gateway/**'
+      - '.github/workflows/deploy-api-gateway.yml'
   pull_request:
     branches:
       - main
