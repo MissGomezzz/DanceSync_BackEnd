@@ -2,11 +2,11 @@ name: Deploy users-service
 
 on:
   push:
-    branches: [deploy/azure]
+    branches: [main]
     paths:
       - 'users-service/**'
       - '.github/workflows/_deploy-service.yml'
-      - '.github/workflows/deploy-users-service.yml'
+      - '.github/workflows/deploy-user-service.yml'
   workflow_dispatch:
 
 jobs:

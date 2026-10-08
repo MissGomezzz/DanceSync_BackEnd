@@ -2,7 +2,7 @@ name: Deploy api-gateway
 
 on:
   push:
-    branches: [deploy/azure]
+    branches: [main]
     paths:
       - 'api-gateway/**'
       - '.github/workflows/_deploy-service.yml'
