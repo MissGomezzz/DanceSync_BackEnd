@@ -1,0 +1,42 @@
+name: Deploy service (reutilizable)
+
+on:
+  workflow_call:
+    inputs:
+      service:
+        description: Nombre de la carpeta, de la imagen y de la Container App
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   
+      contents: read
+    env:
+      IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.service }}:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Login al registro
+        run: az acr login --name ${{ vars.ACR_NAME }}
+
+      - name: Construir y subir la imagen
+        run: |
+          docker build -t "$IMAGE" ./${{ inputs.service }}
+          docker push "$IMAGE"
+
+      - name: Actualizar la Container App
+        run: |
+          az extension add --name containerapp --upgrade
+          az containerapp update \
+            --name ${{ inputs.service }} \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --image "$IMAGE"

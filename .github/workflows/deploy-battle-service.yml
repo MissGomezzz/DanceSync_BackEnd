@@ -1,12 +1,12 @@
-name: Deploy api-gateway
+name: Deploy battle-service
 
 on:
   push:
     branches: [deploy/azure]
     paths:
-      - 'api-gateway/**'
+      - 'battle-service/**'
       - '.github/workflows/_deploy-service.yml'
-      - '.github/workflows/deploy-api-gateway.yml'
+      - '.github/workflows/deploy-battle-service.yml'
   workflow_dispatch:
 
 jobs:
@@ -16,5 +16,5 @@ jobs:
       contents: read
     uses: ./.github/workflows/_deploy-service.yml
     with:
-      service: api-gateway
+      service: battle-service
     secrets: inherit
