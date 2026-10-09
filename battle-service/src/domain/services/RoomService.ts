@@ -254,9 +254,17 @@ export const RoomService = {
     };
   },
 
-  rate(room: Room, rating: Omit<Rating, "submittedAt">): Room {
+  /**
+   * Records a spectator's rating. Ratings are only accepted once the dancing has
+   * begun (battle.startedAt, after the start countdown): before that nobody has
+   * danced yet, so a rating would be meaningless.
+   */
+  rate(room: Room, rating: Omit<Rating, "submittedAt">, now: Date = new Date()): Room {
     if (room.status !== "battling" || !room.battle || !room.dancers) {
       throw new DomainError("ROOM_NOT_BATTLING", `Room ${room.code} has no battle in progress`);
+    }
+    if (now.getTime() < room.battle.startedAt.getTime()) {
+      throw new DomainError("BATTLE_NOT_STARTED", "The battle has not started yet; rate once the dancing begins");
     }
     if (!room.spectators.some((s) => s.id === rating.raterId)) {
       throw new DomainError("INVALID_RATER", "Only spectators can rate dancers");
@@ -274,7 +282,7 @@ export const RoomService = {
       ...room,
       battle: {
         ...room.battle,
-        ratings: [...room.battle.ratings, { ...rating, submittedAt: new Date() }],
+        ratings: [...room.battle.ratings, { ...rating, submittedAt: now }],
       },
     };
   },

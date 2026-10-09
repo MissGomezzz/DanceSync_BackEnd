@@ -3,6 +3,7 @@ export type DomainErrorCode =
   | "ROOM_FULL"
   | "ROOM_NOT_WAITING"
   | "ROOM_NOT_BATTLING"
+  | "BATTLE_NOT_STARTED"
   | "PLAYER_ALREADY_IN_ROOM"
   | "PLAYER_NOT_IN_ROOM"
   | "INVALID_PLAYER"

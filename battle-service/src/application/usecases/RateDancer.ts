@@ -17,16 +17,20 @@ export interface RateDancerOutput {
 }
 
 export class RateDancer {
-  constructor(private readonly rooms: RoomRepository) {}
+  constructor(
+    private readonly rooms: RoomRepository,
+    private readonly clock: () => Date = () => new Date(),
+  ) {}
 
   async execute(input: RateDancerInput): Promise<RateDancerOutput> {
     let finished = false;
+    const now = this.clock();
     const room = await updateRoom(this.rooms, input.roomCode, (current) => {
-      const rated = RoomService.rate(current, {
-        raterId: input.raterId,
-        dancerId: input.dancerId,
-        score: input.score,
-      });
+      const rated = RoomService.rate(
+        current,
+        { raterId: input.raterId, dancerId: input.dancerId, score: input.score },
+        now,
+      );
       // Decided on the latest state: of several concurrent ratings exactly the
       // one that completes the set sees it and finishes the battle.
       finished = RoomService.allRatingsSubmitted(rated);
