@@ -36,8 +36,6 @@ const OFFSETS_MS = [300, 600];
 const WINDOW_MS = 150;
 const GRACE_MS = 50;
 
-process.env.BATTLE_START_COUNTDOWN_MS = "0";
-
 type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
 let httpServer: HttpServer;

@@ -4,6 +4,7 @@ import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
 import { RoomService } from "../../domain/services/RoomService.js";
 import { SongSelectionService } from "../../domain/services/SongSelectionService.js";
 import { updateRoom } from "../roomUpdates.js";
+import type { BattleTimingOptions } from "./StartBattle.js";
 
 export interface ChooseSongInput {
   roomCode: string;
@@ -23,7 +24,10 @@ export interface ChooseSongOutput {
 
 /** The last step of the lobby flow: the chosen song starts the battle in the same stored change. */
 export class ChooseSong {
-  constructor(private readonly rooms: RoomRepository) {}
+  constructor(
+    private readonly rooms: RoomRepository,
+    private readonly timing: BattleTimingOptions = {},
+  ) {}
 
   async execute(input: ChooseSongInput): Promise<ChooseSongOutput> {
     let battleStarted = false;
@@ -32,7 +36,7 @@ export class ChooseSong {
       battleStarted = false;
       const chosen = SongSelectionService.choose(current, input.playerId, input.songId);
       try {
-        const started = RoomService.startBattle(chosen);
+        const started = RoomService.startBattle(chosen, undefined, { ...this.timing, now: new Date() });
         battleStarted = true;
         return started;
       } catch (error) {

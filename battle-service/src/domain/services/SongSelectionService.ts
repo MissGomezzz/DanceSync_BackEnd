@@ -66,8 +66,6 @@ export const SongSelectionService = {
     const previous = room.songSelection?.challenge.phrase;
     const pool = phrases.length > 1 ? phrases.filter((p) => p !== previous) : phrases;
     const phrase = pool[random(pool.length)];
-    const START_COUNTDOWN_MS = 5000;
-
 
     const songSelection: SongSelection = {
       phase: "typing",

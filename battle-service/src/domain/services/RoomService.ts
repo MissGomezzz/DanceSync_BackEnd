@@ -9,8 +9,20 @@ import { isSelectionInProgress, SongSelectionService } from "./SongSelectionServ
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_LENGTH = 6;
-const DEFAULT_START_COUNTDOWN_MS = 5000;
 
+/**
+ * Countdown used when the caller configures none. The running service injects
+ * BATTLE_START_COUNTDOWN_MS (5 s by default, see config/env.ts); the domain
+ * itself never reads the environment.
+ */
+export const DEFAULT_START_COUNTDOWN_MS = 0;
+
+export interface StartBattleOptions {
+  /** Moment of the start command; defaults to the current time. */
+  now?: Date;
+  /** Delay between the start command and battle.startedAt, in ms (0 or more). */
+  countdownMs?: number;
+}
 
 export function generateRoomCode(): string {
   const bytes = randomBytes(ROOM_CODE_LENGTH);
@@ -48,11 +60,6 @@ export function requireRoomCode(code: unknown): string {
     throw new DomainError("ROOM_NOT_FOUND", "A room code is required");
   }
   return code.trim();
-}
-
-function startCountdownMs(): number {
-  const fromEnv = process.env.BATTLE_START_COUNTDOWN_MS;
-  return fromEnv === undefined ? DEFAULT_START_COUNTDOWN_MS : Number(fromEnv);
 }
 
 const PLAYABLE_ROLES: readonly string[] = ["dancer", "spectator"] satisfies PlayerRole[];
@@ -164,7 +171,11 @@ export const RoomService = {
    * the room must have marked themselves ready (setReady) and the song must
    * already be chosen (SongSelectionService).
    */
-  startBattle(room: Room, dancerIds?: string[]): Room {
+  startBattle(room: Room, dancerIds?: string[], options: StartBattleOptions = {}): Room {
+    const { now = new Date(), countdownMs = DEFAULT_START_COUNTDOWN_MS } = options;
+    if (!Number.isFinite(countdownMs) || countdownMs < 0) {
+      throw new RangeError(`The start countdown must be 0 ms or more, received ${countdownMs}`);
+    }
     if (room.status !== "waiting") {
       throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} already started`);
     }
@@ -207,7 +218,7 @@ export const RoomService = {
       song: room.selectedSong,
       ratings: [],
       bonusPoints: Object.fromEntries(dancers.map((d) => [d.id, 0])),
-      startedAt: new Date(Date.now() + startCountdownMs()),
+      startedAt: new Date(now.getTime() + countdownMs),
       finishedAt: null,
       result: null,
     };

@@ -32,14 +32,15 @@ const rooms = new InMemoryRoomRepository();
 const wordRaces = new InMemoryWordRaceRepository();
 const createRoom = new CreateRoom(rooms);
 const joinRoom = new JoinRoom(rooms);
-const startBattle = new StartBattle(rooms);
+const battleTiming = { countdownMs: env.battleStartCountdownMs };
+const startBattle = new StartBattle(rooms, battleTiming);
 const sendChatMessage = new SendChatMessage(rooms);
 const rateDancer = new RateDancer(rooms);
 const selectRole = new SelectRole(rooms);
 const setReady = new SetReady(rooms);
 const startSongChallenge = new StartSongChallenge(rooms, { durationMs: env.songChallengeMs });
 const submitSongPhrase = new SubmitSongPhrase(rooms);
-const chooseSong = new ChooseSong(rooms);
+const chooseSong = new ChooseSong(rooms, battleTiming);
 
 const app = express();
 app.use(cors({ origin: env.corsOrigin, credentials: true }));

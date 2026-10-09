@@ -393,7 +393,13 @@ async function awardWordBonus(
   try {
     return await wordRace.awardWordBonus.execute({ roomCode, playerId });
   } catch (error) {
-    if (!(error instanceof DomainError)) console.error("Error awarding the word bonus", error);
+    // Expected when the battle finished or the winner left meanwhile; still logged,
+    // so a bonus that was not paid can always be traced.
+    if (error instanceof DomainError) {
+      console.warn(`Word bonus not awarded in room ${roomCode} to ${playerId}: ${error.code} ${error.message}`);
+    } else {
+      console.error("Error awarding the word bonus", error);
+    }
     return null;
   }
 }
