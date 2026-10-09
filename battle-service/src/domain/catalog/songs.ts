@@ -1,6 +1,12 @@
 import type { Song } from "../model/Song.js";
 
-/** Songs the chooser can pick from. Replace with a catalog service when one exists. */
+/**
+ * Songs the chooser can pick from. Replace with a catalog service when one exists.
+ *
+ * durationSeconds is the battle clip length, deliberately 90 s for every song:
+ * the videos themselves run 199-258 s, but a battle only plays their first 90 s.
+ * Do not "fix" it to the video length; change it only to change the clip.
+ */
 export const SONG_CATALOG: readonly Song[] = [
   { id: "song-1", title: "Rasputin", artist: "Boney M.", durationSeconds: 90, youtubeId: "flS0SVqTGT0" },
   { id: "song-2", title: "Beauty and a Beat", artist: "Justin Bieber", durationSeconds: 90, youtubeId: "ilp23H9dS_U" },
