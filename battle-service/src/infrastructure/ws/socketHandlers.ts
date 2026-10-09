@@ -3,6 +3,7 @@ import type { JoinRoom, LeaveRoomOutput } from "../../application/usecases/JoinR
 import type { KickPlayer } from "../../application/usecases/KickPlayer.js";
 import type { ReapRooms } from "../../application/usecases/ReapRooms.js";
 import type { CastVote } from "../../application/usecases/CastVote.js";
+import type { RecordMatchResult } from "../../application/usecases/RecordMatchResult.js";
 import type { StartRematch } from "../../application/usecases/StartRematch.js";
 import type { SendChatMessage } from "../../application/usecases/SendChatMessage.js";
 import type { StartBattle } from "../../application/usecases/StartBattle.js";
@@ -52,6 +53,11 @@ export interface SocketDependencies {
   kickPlayer: KickPlayer;
   /** Ends a battle still running at battle.endsAt (the end of the song clip). */
   finishBattleAtDeadline: FinishBattleAtDeadline;
+  /**
+   * Stores every finished battle in the match history (HU 21), in the
+   * background. Optional so harnesses that do not exercise it can omit it.
+   */
+  recordMatchResult?: RecordMatchResult;
   /** Lists rooms and deletes empty ones for the abandoned-room sweep. */
   reapRooms: ReapRooms;
   /** Seat retention after a disconnect, see env.disconnectGraceMs. */
@@ -232,11 +238,16 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    * Single exit for every path that finishes a battle (song end, leave,
    * released seat): room:updated, then battle:finished, then every battle timer
    * stops (publishRoom clears the battle-end deadline). Only the atomic update
-   * that finished the battle reports it, so this runs once per battle.
+   * that finished the battle reports it, so this runs once per battle, and so
+   * does the match history record, sent in the background: a slow or
+   * unavailable users-service never delays the room.
    */
   async function announceBattleFinished(room: Room): Promise<void> {
     publishRoom(room);
     io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, toRoomDto(room, new Date()));
+    deps.recordMatchResult
+      ?.execute(room)
+      .catch((error: unknown) => console.error("Error recording the match result", error));
     await deps.wordRace?.scheduler.stop(room.code);
   }
 

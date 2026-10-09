@@ -8,10 +8,12 @@ import { JoinRoom } from "./application/usecases/JoinRoom.js";
 import { KickPlayer } from "./application/usecases/KickPlayer.js";
 import { ReapRooms } from "./application/usecases/ReapRooms.js";
 import { CastVote } from "./application/usecases/CastVote.js";
+import { RecordMatchResult } from "./application/usecases/RecordMatchResult.js";
 import { StartRematch } from "./application/usecases/StartRematch.js";
 import { SendChatMessage } from "./application/usecases/SendChatMessage.js";
 import { StartBattle } from "./application/usecases/StartBattle.js";
 import { env } from "./config/env.js";
+import { HttpMatchResultPublisher } from "./infrastructure/http/HttpMatchResultPublisher.js";
 import { buildRouter, errorHandler } from "./infrastructure/http/routes.js";
 import { InMemoryRoomRepository } from "./infrastructure/persistence/InMemoryRoomRepository.js";
 import { registerSocketHandlers, type BattleServer } from "./infrastructure/ws/socketHandlers.js";
@@ -86,6 +88,8 @@ const socketHandlers = registerSocketHandlers(io, {
   chooseSong,
   kickPlayer: new KickPlayer(rooms),
   finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
+  // Finished battles go to users-service (PUT /api/matches/{battleId}), retried with backoff.
+  recordMatchResult: new RecordMatchResult(new HttpMatchResultPublisher(env.usersServiceUrl)),
   reapRooms: new ReapRooms(rooms),
   disconnectGraceMs: env.disconnectGraceMs,
   pagehideGraceMs: env.pagehideGraceMs,
