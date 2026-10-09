@@ -1,3 +1,5 @@
+/** Bonus points a dancer earns for winning a word round, unless configured otherwise. */
+export const DEFAULT_WORD_BONUS_POINTS = 1;
 /** Rounds per battle when nothing else is configured. */
 export const DEFAULT_WORD_RACE_ROUNDS = 3;
 /** Time dancers have to type each word. */
@@ -41,7 +43,7 @@ export interface WordRace {
   /** Display names snapshotted with the participants, so a winner who left can still be named. */
   participantNames: Record<string, string>;
   rounds: WordRound[];
-  /** Rounds won per participant. Informational only: it does not change the battle score. */
+  /** Rounds won per participant. The bonus itself is stored in Battle.bonusPoints. */
   wins: Record<string, number>;
 }
 

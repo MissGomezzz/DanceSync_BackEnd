@@ -15,7 +15,7 @@ export function roundStartedPayload(race: WordRace, round: WordRound, now: Date)
   };
 }
 
-export function roundEndedPayload(race: WordRace, round: WordRound): WordRoundEndedPayload {
+export function roundEndedPayload(race: WordRace, round: WordRound, bonusPoints = 0): WordRoundEndedPayload {
   const winnerId = round.status === "won" ? round.winnerId : null;
   return {
     roomCode: race.roomCode,
@@ -27,6 +27,7 @@ export function roundEndedPayload(race: WordRace, round: WordRound): WordRoundEn
     winnerName: winnerId ? (race.participantNames[winnerId] ?? null) : null,
     reason: round.status === "won" ? "won" : "expired",
     wins: { ...race.wins },
+    bonusPoints: round.status === "won" ? bonusPoints : 0,
   };
 }
 

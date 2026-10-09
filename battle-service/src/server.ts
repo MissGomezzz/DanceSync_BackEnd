@@ -12,6 +12,8 @@ import { buildRouter, errorHandler } from "./infrastructure/http/routes.js";
 import { InMemoryRoomRepository } from "./infrastructure/persistence/InMemoryRoomRepository.js";
 import { registerSocketHandlers, type BattleServer } from "./infrastructure/ws/socketHandlers.js";
 import { SelectRole } from "./application/usecases/SelectRole.js";
+import { AwardWordBonus } from "./application/usecases/AwardWordBonus.js";
+import { SetReady } from "./application/usecases/SetReady.js";
 import { ChooseSong } from "./application/usecases/ChooseSong.js";
 import { StartSongChallenge } from "./application/usecases/StartSongChallenge.js";
 import { SubmitSongPhrase } from "./application/usecases/SubmitSongPhrase.js";
@@ -34,6 +36,7 @@ const startBattle = new StartBattle(rooms);
 const sendChatMessage = new SendChatMessage(rooms);
 const rateDancer = new RateDancer(rooms);
 const selectRole = new SelectRole(rooms);
+const setReady = new SetReady(rooms);
 const startSongChallenge = new StartSongChallenge(rooms, { durationMs: env.songChallengeMs });
 const submitSongPhrase = new SubmitSongPhrase(rooms);
 const chooseSong = new ChooseSong(rooms);
@@ -65,6 +68,7 @@ registerSocketHandlers(io, {
   joinRoom,
   startBattle,
   selectRole,
+  setReady,
   sendChatMessage,
   rateDancer,
   startSongChallenge,
@@ -74,6 +78,7 @@ registerSocketHandlers(io, {
   wordRace: {
     scheduler: wordRaceScheduler,
     submitWord: new SubmitWord(wordRaces),
+    awardWordBonus: new AwardWordBonus(rooms, env.wordBonusPoints),
     getActiveWordRound: new GetActiveWordRound(wordRaces),
   },
 });

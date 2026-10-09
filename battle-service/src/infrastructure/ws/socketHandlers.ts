@@ -4,10 +4,12 @@ import type { RateDancer } from "../../application/usecases/RateDancer.js";
 import type { SendChatMessage } from "../../application/usecases/SendChatMessage.js";
 import type { StartBattle } from "../../application/usecases/StartBattle.js";
 import type { SelectRole } from "../../application/usecases/SelectRole.js";
+import type { SetReady } from "../../application/usecases/SetReady.js";
 import type { ChooseSong } from "../../application/usecases/ChooseSong.js";
 import type { StartSongChallenge } from "../../application/usecases/StartSongChallenge.js";
 import type { SubmitSongPhrase } from "../../application/usecases/SubmitSongPhrase.js";
 import type { GetActiveWordRound } from "../../application/usecases/GetActiveWordRound.js";
+import type { AwardWordBonus } from "../../application/usecases/AwardWordBonus.js";
 import type { SubmitWord } from "../../application/usecases/SubmitWord.js";
 import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
@@ -33,6 +35,7 @@ export interface SocketDependencies {
   sendChatMessage: SendChatMessage;
   rateDancer: RateDancer;
   selectRole: SelectRole;
+  setReady: SetReady;
   startSongChallenge: StartSongChallenge;
   submitSongPhrase: SubmitSongPhrase;
   chooseSong: ChooseSong;
@@ -45,6 +48,7 @@ export interface SocketDependencies {
 export interface WordRaceSocketDependencies {
   scheduler: WordRaceScheduler;
   submitWord: SubmitWord;
+  awardWordBonus: AwardWordBonus;
   getActiveWordRound: GetActiveWordRound;
 }
 
@@ -165,6 +169,15 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       }),
     );
 
+    socket.on(ClientEvents.PLAYER_READY, (payload, ack) =>
+      guard(socket, ack, async () => {
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
+        const room = await deps.setReady.execute({ ...payload, roomCode });
+        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+        return room;
+      }),
+    );
+
     socket.on(ClientEvents.ROOM_LEAVE, (payload, ack) =>
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
@@ -177,12 +190,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
         const room = await deps.startBattle.execute({ ...payload, roomCode });
-        io.to(room.code).emit(ServerEvents.BATTLE_STARTED, room);
-        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        // The battle already started; a failure planning the word race must not undo it.
-        deps.wordRace?.scheduler
-          .start(room.code)
-          .catch((error: unknown) => console.error("Error starting the word race", error));
+        announceBattleStarted(io, deps, room);
         return room;
       }),
     );
@@ -195,7 +203,12 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         // Only the submission whose atomic claim succeeded announces the winner, so
         // the room receives exactly one word:round-ended per round.
         if (result.outcome === "won") {
-          io.to(roomCode).emit(ServerEvents.WORD_ROUND_ENDED, roundEndedPayload(result.race, result.round));
+          const bonus = await awardWordBonus(deps.wordRace, roomCode, payload.playerId);
+          io.to(roomCode).emit(
+            ServerEvents.WORD_ROUND_ENDED,
+            roundEndedPayload(result.race, result.round, bonus ? deps.wordRace.awardWordBonus.points : 0),
+          );
+          if (bonus) io.to(roomCode).emit(ServerEvents.ROOM_UPDATED, bonus);
         }
         return { outcome: result.outcome, winnerId: result.round.winnerId };
       }),
@@ -227,8 +240,9 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     socket.on(ClientEvents.SONG_CHOOSE, (payload, ack) =>
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
-        const room = await deps.chooseSong.execute({ ...payload, roomCode });
-        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+        const { room, battleStarted } = await deps.chooseSong.execute({ ...payload, roomCode });
+        if (battleStarted) announceBattleStarted(io, deps, room);
+        else io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
         return room;
       }),
     );
@@ -341,6 +355,16 @@ async function announceLeave(
   await stopWordRaceUnlessBattling(deps, roomCode, room);
 }
 
+/** Single exit for every path that starts a battle: the host's start or the chosen song. */
+function announceBattleStarted(io: BattleServer, deps: SocketDependencies, room: Room): void {
+  io.to(room.code).emit(ServerEvents.BATTLE_STARTED, room);
+  io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+  // The battle already started; a failure planning the word race must not undo it.
+  deps.wordRace?.scheduler
+    .start(room.code)
+    .catch((error: unknown) => console.error("Error starting the word race", error));
+}
+
 /** Single exit for every path that finishes a battle: rating, leave or released seat. */
 async function announceBattleFinished(io: BattleServer, deps: SocketDependencies, room: Room): Promise<void> {
   io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, room);
@@ -355,6 +379,23 @@ async function stopWordRaceUnlessBattling(
 ): Promise<void> {
   if (!deps.wordRace || room?.status === "battling") return;
   await deps.wordRace.scheduler.stop(room?.code ?? roomCode);
+}
+
+/**
+ * Pays the word round bonus to the winner. Returns the updated room, or null when
+ * the battle is already over or the winner left: the round still ends, without a bonus.
+ */
+async function awardWordBonus(
+  wordRace: WordRaceSocketDependencies,
+  roomCode: string,
+  playerId: string,
+): Promise<Room | null> {
+  try {
+    return await wordRace.awardWordBonus.execute({ roomCode, playerId });
+  } catch (error) {
+    if (!(error instanceof DomainError)) console.error("Error awarding the word bonus", error);
+    return null;
+  }
 }
 
 /** A client that (re)joins mid-round gets the word on screen with the time actually left. */

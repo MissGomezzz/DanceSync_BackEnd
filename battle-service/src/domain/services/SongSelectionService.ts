@@ -5,6 +5,7 @@ import { DomainError } from "../errors/DomainError.js";
 import { MIN_DANCERS_PER_BATTLE, type Room } from "../model/Room.js";
 import type { Song } from "../model/Song.js";
 import { DEFAULT_SONG_CHALLENGE_MS, type ChooserReason, type SongSelection } from "../model/SongSelection.js";
+import { requireEveryoneReady } from "./readiness.js";
 
 /** Returns an integer in [0, length). Injected so tests can make picks deterministic. */
 export type RandomIndex = (length: number) => number;
@@ -32,7 +33,10 @@ export function isSelectionInProgress(room: Room): boolean {
 }
 
 export const SongSelectionService = {
-  /** Shows a random phrase to every dancer in the lobby and starts the countdown. */
+  /**
+   * Shows a random phrase to every dancer in the lobby and starts the countdown.
+   * This is the first step of starting a battle, so every player must be ready.
+   */
   start(room: Room, options: StartChallengeOptions = {}): Room {
     const {
       now = new Date(),
@@ -55,6 +59,8 @@ export const SongSelectionService = {
         `At least ${MIN_DANCERS_PER_BATTLE} dancers are required to pick a song`,
       );
     }
+
+    requireEveryoneReady(room);
 
     // Avoid showing the same phrase twice in a row when there is a choice.
     const previous = room.songSelection?.challenge.phrase;

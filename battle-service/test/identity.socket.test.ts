@@ -9,6 +9,7 @@ import { CreateRoom } from "../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
 import { RateDancer } from "../src/application/usecases/RateDancer.js";
 import { SelectRole } from "../src/application/usecases/SelectRole.js";
+import { SetReady } from "../src/application/usecases/SetReady.js";
 import { SendChatMessage } from "../src/application/usecases/SendChatMessage.js";
 import { StartBattle } from "../src/application/usecases/StartBattle.js";
 import { StartSongChallenge } from "../src/application/usecases/StartSongChallenge.js";
@@ -17,6 +18,7 @@ import type { ChatMessage } from "../src/domain/model/ChatMessage.js";
 import type { Room } from "../src/domain/model/Room.js";
 import { InMemoryRoomRepository } from "../src/infrastructure/persistence/InMemoryRoomRepository.js";
 import { registerSocketHandlers, type BattleServer } from "../src/infrastructure/ws/socketHandlers.js";
+import { pickSong, readyUp } from "./support/ready.js";
 
 type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
@@ -75,6 +77,8 @@ async function battle(): Promise<{ code: string; host: ClientSocket; guest: Clie
   await ok(room.host, "role:select", { roomCode: room.code, playerId: "host", role: "dancer" });
   await ok(room.guest, "role:select", { roomCode: room.code, playerId: "guest", role: "dancer" });
   await ok(room.fan, "role:select", { roomCode: room.code, playerId: "fan", role: "spectator" });
+  await readyUp(room.code, { host: room.host, guest: room.guest, fan: room.fan });
+  await pickSong(rooms, room.code);
   await ok(room.host, "battle:start", { roomCode: room.code, requesterId: "host" });
   return room;
 }
@@ -88,6 +92,7 @@ before(async () => {
     joinRoom: new JoinRoom(rooms),
     startBattle: new StartBattle(rooms),
     selectRole: new SelectRole(rooms),
+    setReady: new SetReady(rooms),
     sendChatMessage: new SendChatMessage(rooms),
     rateDancer: new RateDancer(rooms),
     startSongChallenge: new StartSongChallenge(rooms, { durationMs: 300 }),
@@ -124,9 +129,11 @@ describe("Socket identity: every client event acts as the player bound by room:j
   });
 
   it("battle:start cannot be sent as the host by someone else, and a real non-host gets NOT_HOST", async () => {
-    const { code, host, guest } = await lobby();
+    const { code, host, guest, fan } = await lobby();
     await ok(host, "role:select", { roomCode: code, playerId: "host", role: "dancer" });
     await ok(guest, "role:select", { roomCode: code, playerId: "guest", role: "dancer" });
+    await readyUp(code, { host, guest, fan });
+    await pickSong(rooms, code);
 
     await rejected(guest, "battle:start", { roomCode: code, requesterId: "host" }, "PLAYER_NOT_IN_ROOM");
     await rejected(guest, "battle:start", { roomCode: code, requesterId: "guest" }, "NOT_HOST");
@@ -137,9 +144,10 @@ describe("Socket identity: every client event acts as the player bound by room:j
   });
 
   it("song-challenge:start cannot be sent as the host by someone else", async () => {
-    const { code, host, guest } = await lobby();
+    const { code, host, guest, fan } = await lobby();
     await ok(host, "role:select", { roomCode: code, playerId: "host", role: "dancer" });
     await ok(guest, "role:select", { roomCode: code, playerId: "guest", role: "dancer" });
+    await readyUp(code, { host, guest, fan });
 
     await rejected(guest, "song-challenge:start", { roomCode: code, requesterId: "host" }, "PLAYER_NOT_IN_ROOM");
     assert.equal((await storedRoom(code)).songSelection, null);

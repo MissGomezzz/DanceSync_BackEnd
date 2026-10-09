@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import { DomainError } from "../src/domain/errors/DomainError.js";
 import type { Room } from "../src/domain/model/Room.js";
 import { RoomService } from "../src/domain/services/RoomService.js";
+import { allReady } from "./support/ready.js";
 import { SongSelectionService, type RandomIndex } from "../src/domain/services/SongSelectionService.js";
 
 const T0 = new Date("2026-01-01T00:00:00.000Z");
@@ -22,7 +23,7 @@ function lobby(): Room {
   room = RoomService.selectRole(room, "a", "dancer");
   room = RoomService.selectRole(room, "b", "dancer");
   room = RoomService.selectRole(room, "s", "spectator");
-  return room;
+  return allReady(room);
 }
 
 function started(room = lobby(), random: RandomIndex = first): Room {
@@ -91,7 +92,7 @@ describe("Escenario 2: escritura correcta y elección de la canción", () => {
     assert.equal(room.songSelection!.phase, "done");
     assert.deepEqual(room.selectedSong, song);
 
-    const battle = RoomService.startBattle(room).battle!;
+    const battle = RoomService.startBattle(allReady(room)).battle!;
     assert.deepEqual(battle.song, song);
   });
 
@@ -108,6 +109,16 @@ describe("Escenario 2: escritura correcta y elección de la canción", () => {
 
   it("no se puede iniciar la batalla mientras se elige la canción", () => {
     assertDomainError(() => RoomService.startBattle(started()), "SONG_SELECTION_IN_PROGRESS");
+  });
+
+  it("no se puede iniciar la batalla sin haber elegido la canción", () => {
+    assertDomainError(() => RoomService.startBattle(lobby()), "SONG_NOT_SELECTED");
+  });
+
+  it("el reto de la frase exige que todos los jugadores estén listos", () => {
+    const room = RoomService.setReady(lobby(), "s", false);
+    assertDomainError(() => SongSelectionService.start(room), "PLAYERS_NOT_READY");
+    assert.equal(SongSelectionService.start(RoomService.setReady(room, "s", true)).songSelection?.phase, "typing");
   });
 });
 
@@ -190,7 +201,7 @@ describe("Escenario 3: escritura incorrecta o tiempo agotado", () => {
 
   it("everyone failed counts only the participants still in the room", () => {
     let room = RoomService.join(lobby(), { id: "c", displayName: "C" });
-    room = RoomService.selectRole(room, "c", "dancer");
+    room = allReady(RoomService.selectRole(room, "c", "dancer"));
     room = SongSelectionService.start(room, { now: T0, durationMs: DURATION, random: first, phrases: PHRASES });
     room = SongSelectionService.submit(room, "a", "mal", at(1000)).room;
     room = RoomService.leave(room, "c");

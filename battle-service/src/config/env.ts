@@ -27,6 +27,8 @@ export const env = {
   wordRaceWindowMs: readNumber("WORD_RACE_WINDOW_MS", 10_000),
   /** Minimum time between two word-race round openings. */
   wordRaceMinGapMs: readNumber("WORD_RACE_MIN_GAP_MS", 12_000),
+  /** Points a dancer earns for winning a word round, added to the battle score. */
+  wordBonusPoints: readNumber("WORD_BONUS_POINTS", 1),
   /** Song length assumed for the word-race timeline when the battle has no song. */
   wordRaceFallbackDurationMs: readNumber("WORD_RACE_FALLBACK_DURATION_MS", 90_000),
 } as const;

@@ -9,6 +9,7 @@ import { CreateRoom } from "../../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../../src/application/usecases/JoinRoom.js";
 import { RateDancer } from "../../src/application/usecases/RateDancer.js";
 import { SelectRole } from "../../src/application/usecases/SelectRole.js";
+import { SetReady } from "../../src/application/usecases/SetReady.js";
 import { SendChatMessage } from "../../src/application/usecases/SendChatMessage.js";
 import { StartBattle } from "../../src/application/usecases/StartBattle.js";
 import { StartSongChallenge, type SongChallengeOptions } from "../../src/application/usecases/StartSongChallenge.js";
@@ -47,6 +48,7 @@ export class SocketHarness {
       joinRoom: new JoinRoom(this.rooms),
       startBattle: new StartBattle(this.rooms),
       selectRole: new SelectRole(this.rooms),
+      setReady: new SetReady(this.rooms),
       sendChatMessage: new SendChatMessage(this.rooms),
       rateDancer: new RateDancer(this.rooms),
       startSongChallenge: new StartSongChallenge(this.rooms, options.songChallenge),

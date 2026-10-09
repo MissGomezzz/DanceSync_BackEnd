@@ -9,6 +9,8 @@ export type DomainErrorCode =
   | "NOT_ENOUGH_PLAYERS"
   | "NOT_ENOUGH_DANCERS"
   | "INVALID_DANCER"
+  | "PLAYERS_NOT_READY"
+  | "SONG_NOT_SELECTED"
   | "INVALID_RATER"
   | "NOT_HOST"
   | "INVALID_SCORE"
