@@ -7,17 +7,26 @@ on:
         description: Nombre de la carpeta, de la imagen y de la Container App
         required: true
         type: string
+      ref:
+        description: Commit to build and deploy (the one CI verified)
+        required: true
+        type: string
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      id-token: write   
+      id-token: write
       contents: read
     env:
-      IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.service }}:${{ github.sha }}
+      IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/${{ inputs.service }}:${{ inputs.ref }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: azure/login@v3
         with:

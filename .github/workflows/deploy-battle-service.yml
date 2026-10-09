@@ -1,20 +1,39 @@
 name: Deploy battle-service
 
+# Deploys only what CI has verified: this workflow runs when "Backend CI"
+# finishes on main and deploys the exact commit CI tested (head_sha), never
+# a newer one. workflow_run cannot filter by path, so every green CI run on
+# main redeploys all three services (a new revision of an unchanged image is
+# harmless); see the README "CD" section. workflow_dispatch stays available
+# for manual redeploys of the selected branch.
 on:
-  push:
+  workflow_run:
+    workflows: ["Backend CI"]
+    types: [completed]
     branches: [main]
-    paths:
-      - 'battle-service/**'
-      - '.github/workflows/_deploy-service.yml'
-      - '.github/workflows/deploy-battle-service.yml'
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-battle-service
+  cancel-in-progress: false
 
 jobs:
   deploy:
+    # Only a successful CI run of a push to this repository's main branch (not
+    # a pull request whose head branch happens to be called main).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     permissions:
       id-token: write
       contents: read
     uses: ./.github/workflows/_deploy-service.yml
     with:
       service: battle-service
+      ref: ${{ github.event.workflow_run.head_sha || github.sha }}
     secrets: inherit
