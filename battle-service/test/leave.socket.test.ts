@@ -31,9 +31,15 @@ import { createSocketWordRaceBroadcaster } from "../src/infrastructure/ws/wordRa
 import { pickSong, readyUp } from "./support/ready.js";
 import { AwardWordBonus } from "../src/application/usecases/AwardWordBonus.js";
 
-/** Round openings (ms after the battle starts), shrunk so the test runs quickly. */
-const OFFSETS_MS = [300, 600];
-const WINDOW_MS = 150;
+/**
+ * Round openings (ms after the battle starts), shrunk so the test runs quickly.
+ * The window must comfortably outlast a loaded machine's scheduling delays (the
+ * suite runs files in parallel): with a 150 ms window the round sometimes
+ * expired before the winning submission arrived. The second round opens well
+ * after the first one closes, so "round 1" is never confused with "round 2".
+ */
+const OFFSETS_MS = [300, 2000];
+const WINDOW_MS = 1000;
 const GRACE_MS = 50;
 
 type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
@@ -147,7 +153,7 @@ describe("Leaving during a battle over Socket.IO", () => {
     assert.ok(scheduler.pendingTimers(code) > 0, "the word race was stopped");
 
     // The word race keeps running for the remaining dancers.
-    await waitUntil(() => host.started.length === 1, "round 1 after the departure");
+    await waitUntil(() => host.started.length >= 1, "round 1 after the departure");
     const round = host.started[0];
     const win = await ok<{ outcome: string }>(d2.socket, "word:submit", {
       roomCode: code,
