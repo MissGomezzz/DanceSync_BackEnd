@@ -39,9 +39,10 @@ describe("Reaping abandoned rooms", () => {
   });
 
   it("a room whose host connects in time is kept", async () => {
+    // Connected beforehand: only the join itself has to beat the deadline, even on a loaded machine.
+    const host = await harness.client();
     const { code, hostId } = await harness.createRoom.execute({ hostId: "host", displayName: "Host" });
     harness.handlers().watchNewRoom(code, hostId);
-    const host = await harness.client();
     await ok(host, "room:join", { roomCode: code, playerId: "host", displayName: "Host" });
     await sleep(CREATED_ROOM_GRACE_MS + 150);
     assert.deepEqual((await harness.storedRoom(code)).players.map((p) => p.id), ["host"]);
@@ -101,8 +102,8 @@ describe("Reaping runs on its own", () => {
   after(() => harness.stop());
 
   it("the periodic sweep releases an abandoned seat without any help", async () => {
-    const { code } = await harness.createRoom.execute({ hostId: "host", displayName: "Host" });
     const host = await harness.client();
+    const { code } = await harness.createRoom.execute({ hostId: "host", displayName: "Host" });
     await ok(host, "room:join", { roomCode: code, playerId: "host", displayName: "Host" });
     await seatWithoutSocket(harness, code, "stale", "spectator");
     const seen = record<RoomDto>(host, "room:updated");
