@@ -123,8 +123,9 @@ Tasks: Cambio del color del botón una vez oprimido · Endpoint de salida de sal
 
 - [ ] A visible "Leave room" button exists in the lobby, the battle and the results dashboard.
 - [ ] Once pressed it changes colour and label ("Leaving…") and is disabled; navigation home is immediate.
-- [ ] `POST /api/rooms/{code}/leave` with `{ playerId }` runs the same leave flow as the socket event (seat released, host handed over, battle settled, broadcast).
-- [ ] Closing the tab sends the same request with `navigator.sendBeacon`, so the seat is released at once instead of after the disconnect grace period.
+- [ ] `POST /api/rooms/{code}/leave` with `{ playerId, reason?: "explicit" | "pagehide" }` runs the same leave flow as the socket event (seat released, host handed over, battle settled, broadcast). `reason` defaults to `"explicit"`: immediate leave, `204`.
+- [ ] Hiding the page sends the same request with `navigator.sendBeacon` and `reason: "pagehide"` (body sent as `text/plain` JSON). Browsers fire `pagehide` on a reload as well as on a tab close, so this does not release at once: the seat is released after `PAGEHIDE_GRACE_MS` (default 3 s) only if no socket of the player is bound to the room by then; a rejoin cancels it. Answer `202`. A reload keeps the seat, the host role and a running battle; a closed tab frees them in seconds instead of after the 15 s disconnect grace.
+- [ ] The explicit Leave button keeps using the socket `room:leave`.
 
 ## Technical design
 
@@ -150,7 +151,7 @@ Tasks: Cambio del color del botón una vez oprimido · Endpoint de salida de sal
 | S→C | `room:updated` etc. | Room DTO | DTO adds `battle.standings` and `battle.voteCounts` (live). Raw votes are never sent. |
 | S→C | `vote:mine` | `{ roomCode, dancerId \| null }` | Sent only to the voter's `player:<id>` channel after each change and on join resync. |
 | S→C | `battle:finished` | Room DTO | Unchanged event; `battle.result.standings` filled. |
-| HTTP | `POST /api/rooms/{code}/leave` | `{ playerId }` | 204. Same flow as `room:leave`. |
+| HTTP | `POST /api/rooms/{code}/leave` | `{ playerId, reason?: "explicit" \| "pagehide" }` (JSON or `text/plain` JSON) | `explicit` (default): 204, same flow as `room:leave`. `pagehide` (beacon): 202, release after `PAGEHIDE_GRACE_MS` (default 3000) unless the player rejoined. 400 bad body or reason, 404 unknown room, 403 not a member. |
 | HTTP | `GET /api/matches/{id}` | — | users-service via gateway (GET only). |
 | HTTP | `GET /api/matches?roomCode=` | — | users-service via gateway (GET only). |
 | Internal | `PUT /api/matches/{id}` | match document | battle-service → users-service directly; NOT routed by the gateway. |
