@@ -1,5 +1,6 @@
 package com.dancesync.users.infrastructure.adapter.in.rest;
 
+import com.dancesync.users.domain.exception.MatchNotFoundException;
 import com.dancesync.users.domain.exception.UserAlreadyExistsException;
 import com.dancesync.users.domain.exception.UserNotFoundException;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -14,6 +15,11 @@ public class RestExceptionHandler {
 
     @ExceptionHandler(UserNotFoundException.class)
     public ProblemDetail handleNotFound(UserNotFoundException ex) {
+        return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
+    }
+
+    @ExceptionHandler(MatchNotFoundException.class)
+    public ProblemDetail handleMatchNotFound(MatchNotFoundException ex) {
         return ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
     }
 
