@@ -6,6 +6,7 @@ import { Server } from "socket.io";
 import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { ChooseSong } from "../../src/application/usecases/ChooseSong.js";
 import { FinishBattleAtDeadline } from "../../src/application/usecases/FinishBattleAtDeadline.js";
+import { KickPlayer } from "../../src/application/usecases/KickPlayer.js";
 import { CreateRoom } from "../../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../../src/application/usecases/JoinRoom.js";
 import { RateDancer } from "../../src/application/usecases/RateDancer.js";
@@ -56,6 +57,7 @@ export class SocketHarness {
       submitSongPhrase: new SubmitSongPhrase(this.rooms),
       chooseSong: new ChooseSong(this.rooms),
       finishBattleAtDeadline: new FinishBattleAtDeadline(this.rooms),
+      kickPlayer: new KickPlayer(this.rooms),
       disconnectGraceMs: options.disconnectGraceMs ?? 50,
       ...options.extend?.(this.rooms),
     });

@@ -170,6 +170,28 @@ export const RoomService = {
   },
 
   /**
+   * The host removes another player from the lobby. Every player must be ready
+   * before the song selection or the battle can start, so one idle player would
+   * otherwise hold the whole room. The kicked player leaves through the normal
+   * departure rules (a song chooser's turn is passed on, and so on).
+   */
+  kick(room: Room, requesterId: string, playerId: string, now: Date = new Date()): Room {
+    if (room.hostId !== requesterId) {
+      throw new DomainError("NOT_HOST", "Only the host can remove players");
+    }
+    if (room.status !== "waiting") {
+      throw new DomainError("ROOM_NOT_WAITING", `Players can only be removed from room ${room.code} in the lobby`);
+    }
+    if (typeof playerId !== "string" || playerId === requesterId) {
+      throw new DomainError("INVALID_PLAYER", "Choose another player of the room to remove");
+    }
+    if (!room.players.some((p) => p.id === playerId)) {
+      throw new DomainError("PLAYER_NOT_IN_ROOM", `Player ${playerId} is not in room ${room.code}`);
+    }
+    return RoomService.leave(room, playerId, now);
+  },
+
+  /**
    * Starts a battle using whoever currently has role "dancer" (chosen via
    * selectRole), unless explicit dancerIds are given. Anyone still
    * "undecided" at this point becomes a spectator by default. Every player in

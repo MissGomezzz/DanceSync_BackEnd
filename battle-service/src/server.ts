@@ -5,6 +5,7 @@ import { Server } from "socket.io";
 import { CreateRoom } from "./application/usecases/CreateRoom.js";
 import { FinishBattleAtDeadline } from "./application/usecases/FinishBattleAtDeadline.js";
 import { JoinRoom } from "./application/usecases/JoinRoom.js";
+import { KickPlayer } from "./application/usecases/KickPlayer.js";
 import { RateDancer } from "./application/usecases/RateDancer.js";
 import { SendChatMessage } from "./application/usecases/SendChatMessage.js";
 import { StartBattle } from "./application/usecases/StartBattle.js";
@@ -83,6 +84,7 @@ registerSocketHandlers(io, {
   startSongChallenge,
   submitSongPhrase,
   chooseSong,
+  kickPlayer: new KickPlayer(rooms),
   finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
   disconnectGraceMs: env.disconnectGraceMs,
   wordRace: {

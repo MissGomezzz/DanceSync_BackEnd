@@ -1,5 +1,6 @@
 import type { Server, Socket } from "socket.io";
 import type { JoinRoom, LeaveRoomOutput } from "../../application/usecases/JoinRoom.js";
+import type { KickPlayer } from "../../application/usecases/KickPlayer.js";
 import type { RateDancer } from "../../application/usecases/RateDancer.js";
 import type { SendChatMessage } from "../../application/usecases/SendChatMessage.js";
 import type { StartBattle } from "../../application/usecases/StartBattle.js";
@@ -42,6 +43,7 @@ export interface SocketDependencies {
   startSongChallenge: StartSongChallenge;
   submitSongPhrase: SubmitSongPhrase;
   chooseSong: ChooseSong;
+  kickPlayer: KickPlayer;
   /** Ends a battle still running at battle.endsAt (song clip plus rating grace). */
   finishBattleAtDeadline: FinishBattleAtDeadline;
   /** Seat retention after a disconnect, see env.disconnectGraceMs. */
@@ -207,10 +209,15 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    * and player channels and loses its binding, so a second tab of a player who
    * left can no longer act (requireOwnSeat fails) nor receive the room's events.
    */
-  async function unbindPlayer(roomCode: string, playerId: string): Promise<void> {
+  async function unbindPlayer(
+    roomCode: string,
+    playerId: string,
+    beforeUnbind?: (socket: BattleSocket) => void,
+  ): Promise<void> {
     for (const socket of io.of("/").sockets.values()) {
       const { roomCode: bound, playerId: boundPlayer } = socket.data;
       if (!bound || boundPlayer !== playerId || bound.toUpperCase() !== roomCode.toUpperCase()) continue;
+      beforeUnbind?.(socket);
       await unbindSocket(socket);
     }
   }
@@ -303,6 +310,22 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const left = await leaveRoom(roomCode, payload.playerId);
         return toRoomDtoOrNull(left.room, new Date());
+      }),
+    );
+
+    socket.on(ClientEvents.PLAYER_KICK, (payload, ack) =>
+      guard(socket, ack, async () => {
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
+        const room = await deps.kickPlayer.execute({ ...payload, roomCode });
+        const kickedId = payload.playerId;
+        cancelGrace(room.code, kickedId);
+        // Tell every tab of the kicked player, then cut them off the room: they can
+        // neither act (requireOwnSeat) nor receive its events any more.
+        await unbindPlayer(room.code, kickedId, (kicked) =>
+          kicked.emit(ServerEvents.ROOM_KICKED, { roomCode: room.code }),
+        );
+        publishRoom(room);
+        return toRoomDto(room, new Date());
       }),
     );
 

@@ -18,6 +18,7 @@ export const ClientEvents = {
   SONG_CHALLENGE_SUBMIT: "song-challenge:submit",
   SONG_CHOOSE: "song:choose",
   WORD_SUBMIT: "word:submit",
+  PLAYER_KICK: "player:kick",
 } as const;
 
 /** Events emitted by the server. */
@@ -30,6 +31,7 @@ export const ServerEvents = {
   WEBRTC_SIGNAL: "webrtc:signal",
   WORD_ROUND_STARTED: "word:round-started",
   WORD_ROUND_ENDED: "word:round-ended",
+  ROOM_KICKED: "room:kicked",
   ERROR: "error:domain",
 } as const;
 
@@ -55,6 +57,18 @@ export interface PlayerReadyPayload {
   roomCode: string;
   playerId: string;
   ready: boolean;
+}
+
+/** The host removes `playerId` from the lobby. */
+export interface PlayerKickPayload {
+  roomCode: string;
+  requesterId: string;
+  playerId: string;
+}
+
+/** Sent only to the sockets of the kicked player, right before they are unbound from the room. */
+export interface RoomKickedPayload {
+  roomCode: string;
 }
 
 export interface BattleStartPayload {
@@ -200,6 +214,7 @@ export interface ClientToServerEvents {
   ) => void;
   [ClientEvents.SONG_CHOOSE]: (payload: SongChoosePayload, ack?: Ack<RoomDto>) => void;
   [ClientEvents.WORD_SUBMIT]: (payload: WordSubmitPayload, ack?: Ack<WordSubmitResult>) => void;
+  [ClientEvents.PLAYER_KICK]: (payload: PlayerKickPayload, ack?: Ack<RoomDto>) => void;
 }
 
 export interface ServerToClientEvents {
@@ -211,6 +226,7 @@ export interface ServerToClientEvents {
   [ServerEvents.WEBRTC_SIGNAL]: (payload: WebRtcSignalPayload) => void;
   [ServerEvents.WORD_ROUND_STARTED]: (payload: WordRoundStartedPayload) => void;
   [ServerEvents.WORD_ROUND_ENDED]: (payload: WordRoundEndedPayload) => void;
+  [ServerEvents.ROOM_KICKED]: (payload: RoomKickedPayload) => void;
   [ServerEvents.ERROR]: (error: DomainErrorPayload) => void;
 }
 
