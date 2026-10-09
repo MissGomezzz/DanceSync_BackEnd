@@ -2,6 +2,8 @@ import type { Song } from "./Song.js";
 
 /** Default time players have to type the phrase. */
 export const DEFAULT_SONG_CHALLENGE_MS = 15_000;
+/** Default time the chooser has to pick a song before one is picked for them. */
+export const DEFAULT_SONG_CHOOSE_MS = 20_000;
 
 /**
  * - typing: the phrase is on screen and participants race to type it.
@@ -36,4 +38,14 @@ export interface SongSelection {
   chooserId: string | null;
   chooserReason: ChooserReason | null;
   songOptions: Song[];
+  /** Time each chooser gets to pick, snapshotted when the challenge starts. */
+  chooseMs: number;
+  /**
+   * While phase is "choosing": when the current chooser's turn runs out and a
+   * random song is picked for them. Renewed whenever the turn passes to someone
+   * else; null in the other phases.
+   */
+  chooseDeadline: Date | null;
+  /** True when the song was picked at random because the chooser let the deadline pass. */
+  autoPicked: boolean;
 }

@@ -38,7 +38,10 @@ const sendChatMessage = new SendChatMessage(rooms);
 const rateDancer = new RateDancer(rooms);
 const selectRole = new SelectRole(rooms);
 const setReady = new SetReady(rooms);
-const startSongChallenge = new StartSongChallenge(rooms, { durationMs: env.songChallengeMs });
+const startSongChallenge = new StartSongChallenge(rooms, {
+  durationMs: env.songChallengeMs,
+  chooseMs: env.songChooseMs,
+});
 const submitSongPhrase = new SubmitSongPhrase(rooms);
 const chooseSong = new ChooseSong(rooms, battleTiming);
 

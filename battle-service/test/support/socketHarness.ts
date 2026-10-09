@@ -75,6 +75,12 @@ export class SocketHarness {
     return socket;
   }
 
+  /** Deadline timers owned by the socket handlers. */
+  roomTimers() {
+    assert.ok(this.handle, "the harness is not started");
+    return this.handle.roomTimers;
+  }
+
   async storedRoom(code: string) {
     const room = await this.rooms.findByCode(code);
     assert.ok(room, `room ${code} should exist`);

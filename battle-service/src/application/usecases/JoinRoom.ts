@@ -46,8 +46,9 @@ export class JoinRoom {
     // Removing the last player deletes the room in the same atomic step, so a
     // player joining at that moment either gets in first (and keeps the room
     // alive) or finds it gone, never a seat in a room deleted right after.
+    const now = new Date();
     const room = await this.rooms.update(input.roomCode, (current) => {
-      const updated = RoomService.leave(current, input.playerId);
+      const updated = RoomService.leave(current, input.playerId, now);
       battleFinished = current.status === "battling" && updated.status === "finished";
       return updated.players.length === 0 ? null : updated;
     });

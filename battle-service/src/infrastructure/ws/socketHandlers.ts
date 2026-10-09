@@ -93,6 +93,32 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     } else {
       roomTimers.clear(room.code, "song-challenge");
     }
+    // The chooser's deadline. Re-armed on every publish, so it follows a turn
+    // passed to another chooser, and an overdue deadline (whatever the reason the
+    // timer did not run) is settled on the next publish of the room.
+    if (room.status === "waiting" && selection?.phase === "choosing" && selection.chooseDeadline) {
+      const challengeId = selection.challenge.id;
+      roomTimers.set(room.code, "song-choose", selection.chooseDeadline, () => autoPickSong(room.code, challengeId));
+    } else {
+      roomTimers.clear(room.code, "song-choose");
+    }
+  }
+
+  async function autoPickSong(roomCode: string, challengeId: string): Promise<void> {
+    let result;
+    try {
+      result = await deps.chooseSong.autoPick({ roomCode, challengeId });
+    } catch (error) {
+      if (error instanceof DomainError && error.code === "ROOM_NOT_FOUND") return;
+      throw error;
+    }
+    if (!result.picked) {
+      // Fired a moment early, or for a turn that was renewed: follow the stored state.
+      armRoomTimers(result.room);
+      return;
+    }
+    if (result.battleStarted) announceBattleStarted(result.room);
+    else publishRoom(result.room);
   }
 
   async function expireSongChallenge(roomCode: string, challengeId: string): Promise<void> {

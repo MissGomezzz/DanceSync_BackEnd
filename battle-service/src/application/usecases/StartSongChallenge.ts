@@ -17,6 +17,8 @@ export interface ExpireSongChallengeInput {
 
 export interface SongChallengeOptions {
   durationMs?: number;
+  /** Time each chooser gets to pick a song before one is picked at random. */
+  chooseMs?: number;
   random?: RandomIndex;
   phrases?: readonly string[];
 }
@@ -32,16 +34,17 @@ export class StartSongChallenge {
       if (room.hostId !== input.requesterId) {
         throw new DomainError("NOT_HOST", "Only the host can start the song selection");
       }
-      return SongSelectionService.start(room, this.options);
+      return SongSelectionService.start(room, { ...this.options, now: new Date() });
     });
   }
 
   /** Resolves a challenge whose countdown ran out. Returns null when there was nothing to expire. */
   async expire(input: ExpireSongChallengeInput): Promise<Room | null> {
     let expired = false;
+    const now = new Date();
     try {
       const room = await updateRoom(this.rooms, input.roomCode, (current) => {
-        const updated = SongSelectionService.expire(current, input.challengeId, this.options.random);
+        const updated = SongSelectionService.expire(current, input.challengeId, this.options.random, now);
         expired = updated !== null;
         return updated ?? current;
       });

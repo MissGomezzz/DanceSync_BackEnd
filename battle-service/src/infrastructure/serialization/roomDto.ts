@@ -12,6 +12,8 @@ export interface SongSelectionDto extends Omit<SongSelection, "challenge"> {
     /** Time left to type the phrase, never negative. */
     expiresInMs: number;
   };
+  /** Time the current chooser has left to pick (never negative) while phase is "choosing"; null otherwise. */
+  chooseExpiresInMs: number | null;
 }
 
 export interface BattleDto extends Battle {
@@ -41,6 +43,10 @@ export function toRoomDto(room: Room, now: Date): RoomDto {
             ...songSelection.challenge,
             expiresInMs: Math.max(0, songSelection.challenge.expiresAt.getTime() - at),
           },
+          chooseExpiresInMs:
+            songSelection.phase === "choosing" && songSelection.chooseDeadline
+              ? Math.max(0, songSelection.chooseDeadline.getTime() - at)
+              : null,
         }
       : null,
     battle: battle ? { ...battle, startsInMs: battle.startedAt.getTime() - at } : null,

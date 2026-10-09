@@ -42,6 +42,8 @@ export function loadEnv(source: Source = process.env) {
     disconnectGraceMs: read("DISCONNECT_GRACE_MS", 15_000, "non-negative"),
     /** Time players have to type the phrase that grants the right to choose the song. */
     songChallengeMs: read("SONG_CHALLENGE_MS", 15_000, "positive"),
+    /** Time the chooser has to pick a song before the server picks one at random. */
+    songChooseMs: read("SONG_CHOOSE_MS", 20_000, "positive"),
     /** Countdown between the battle start and the moment dancing (and rating) begins. */
     battleStartCountdownMs: read("BATTLE_START_COUNTDOWN_MS", 5_000, "non-negative"),
     /** Word race rounds per battle (fewer when the song is too short to fit them). */

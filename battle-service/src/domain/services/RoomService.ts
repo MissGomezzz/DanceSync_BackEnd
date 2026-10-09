@@ -5,7 +5,7 @@ import { MAX_DISPLAY_NAME_LENGTH, MAX_PLAYER_ID_LENGTH, type Player, type Player
 import { MAX_SCORE, MIN_SCORE, type Rating } from "../model/Rating.js";
 import { MAX_PLAYERS, MIN_DANCERS_PER_BATTLE, type Room } from "../model/Room.js";
 import { requireEveryoneReady } from "./readiness.js";
-import { isSelectionInProgress, SongSelectionService } from "./SongSelectionService.js";
+import { isSelectionInProgress, secureRandomIndex, SongSelectionService } from "./SongSelectionService.js";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_LENGTH = 6;
@@ -149,7 +149,7 @@ export const RoomService = {
    *   rated every remaining dancer, which finishes the battle with a result.
    * Callers detect the end by comparing the status before and after.
    */
-  leave(room: Room, playerId: string): Room {
+  leave(room: Room, playerId: string, now: Date = new Date()): Room {
     if (!room.players.some((p) => p.id === playerId)) {
       throw new DomainError("PLAYER_NOT_IN_ROOM", `Player ${playerId} is not in room ${room.code}`);
     }
@@ -161,7 +161,7 @@ export const RoomService = {
       spectators: room.spectators.filter((p) => p.id !== playerId),
       hostId: room.hostId === playerId ? (players[0]?.id ?? room.hostId) : room.hostId,
     };
-    return SongSelectionService.handlePlayerLeft(settleBattleAfterLeave(updated, playerId), playerId);
+    return SongSelectionService.handlePlayerLeft(settleBattleAfterLeave(updated, playerId), playerId, secureRandomIndex, now);
   },
 
   /**

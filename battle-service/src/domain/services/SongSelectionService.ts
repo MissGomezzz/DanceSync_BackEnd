@@ -4,7 +4,12 @@ import { SONG_CATALOG } from "../catalog/songs.js";
 import { DomainError } from "../errors/DomainError.js";
 import { MIN_DANCERS_PER_BATTLE, type Room } from "../model/Room.js";
 import type { Song } from "../model/Song.js";
-import { DEFAULT_SONG_CHALLENGE_MS, type ChooserReason, type SongSelection } from "../model/SongSelection.js";
+import {
+  DEFAULT_SONG_CHALLENGE_MS,
+  DEFAULT_SONG_CHOOSE_MS,
+  type ChooserReason,
+  type SongSelection,
+} from "../model/SongSelection.js";
 import { requireEveryoneReady } from "./readiness.js";
 
 /** Returns an integer in [0, length). Injected so tests can make picks deterministic. */
@@ -17,6 +22,8 @@ export type SubmitOutcome = "accepted" | "incorrect" | "expired";
 export interface StartChallengeOptions {
   now?: Date;
   durationMs?: number;
+  /** Time each chooser gets to pick a song (see SongSelection.chooseDeadline). */
+  chooseMs?: number;
   random?: RandomIndex;
   phrases?: readonly string[];
   songs?: readonly Song[];
@@ -41,11 +48,15 @@ export const SongSelectionService = {
     const {
       now = new Date(),
       durationMs = DEFAULT_SONG_CHALLENGE_MS,
+      chooseMs = DEFAULT_SONG_CHOOSE_MS,
       random = secureRandomIndex,
       phrases = SONG_CHALLENGE_PHRASES,
       songs = SONG_CATALOG,
     } = options;
 
+    if (!Number.isFinite(chooseMs) || chooseMs <= 0) {
+      throw new RangeError(`The time to choose a song must be more than 0 ms, received ${chooseMs}`);
+    }
     if (room.status !== "waiting") {
       throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} is not in the lobby`);
     }
@@ -80,6 +91,9 @@ export const SongSelectionService = {
       chooserId: null,
       chooserReason: null,
       songOptions: [...songs],
+      chooseMs,
+      chooseDeadline: null,
+      autoPicked: false,
     };
     return { ...room, songSelection, selectedSong: null };
   },
@@ -109,7 +123,7 @@ export const SongSelectionService = {
     // dancer who already misspelled (they would otherwise get a misleading error
     // and the round would wait for the server timer).
     if (now.getTime() >= selection.challenge.expiresAt.getTime()) {
-      return { room: assignFallbackChooser(room, selection, "timeout", random), outcome: "expired" };
+      return { room: assignFallbackChooser(room, selection, "timeout", random, now), outcome: "expired" };
     }
     if (selection.failedIds.includes(playerId)) {
       throw new DomainError("ATTEMPT_ALREADY_USED", "You already used your attempt in this challenge");
@@ -117,7 +131,7 @@ export const SongSelectionService = {
 
     if (normalizeAttempt(text) === selection.challenge.phrase) {
       return {
-        room: { ...room, songSelection: { ...selection, phase: "choosing", chooserId: playerId, chooserReason: "typed" } },
+        room: { ...room, songSelection: choosing(selection, playerId, "typed", now) },
         outcome: "accepted",
       };
     }
@@ -130,7 +144,7 @@ export const SongSelectionService = {
       .every((id) => failed.failedIds.includes(id));
     return {
       room: everyoneFailed
-        ? assignFallbackChooser(room, failed, "all-failed", random)
+        ? assignFallbackChooser(room, failed, "all-failed", random, now)
         : { ...room, songSelection: failed },
       outcome: "incorrect",
     };
@@ -140,10 +154,15 @@ export const SongSelectionService = {
    * Called when the countdown reaches zero. Returns null when there is nothing to
    * expire (the round was already won, replaced by a new one, or cancelled).
    */
-  expire(room: Room, challengeId: string, random: RandomIndex = secureRandomIndex): Room | null {
+  expire(
+    room: Room,
+    challengeId: string,
+    random: RandomIndex = secureRandomIndex,
+    now: Date = new Date(),
+  ): Room | null {
     const selection = room.songSelection;
     if (!selection || selection.phase !== "typing" || selection.challenge.id !== challengeId) return null;
-    return assignFallbackChooser(room, selection, "timeout", random);
+    return assignFallbackChooser(room, selection, "timeout", random, now);
   },
 
   choose(room: Room, playerId: string, songId: string): Room {
@@ -158,17 +177,45 @@ export const SongSelectionService = {
     if (!song) {
       throw new DomainError("INVALID_SONG", `Song ${songId} is not one of the options`);
     }
-    return { ...room, songSelection: { ...selection, phase: "done" }, selectedSong: song };
+    return { ...room, songSelection: { ...selection, phase: "done", chooseDeadline: null }, selectedSong: song };
+  },
+
+  /**
+   * Called when the chooser's deadline passes: picks a random song among the
+   * options for them, exactly as if they had chosen it (the caller then follows
+   * the manual choice path, which may start the battle). Returns null when there
+   * is nothing to pick: another challenge, not choosing anymore (the chooser
+   * already picked or the selection was cancelled) or the deadline not reached
+   * yet (the turn passed to someone else and was renewed).
+   */
+  autoPick(room: Room, challengeId: string, now: Date = new Date(), random: RandomIndex = secureRandomIndex): Room | null {
+    const selection = room.songSelection;
+    if (!selection || selection.phase !== "choosing" || selection.challenge.id !== challengeId) return null;
+    if (!selection.chooserId || !selection.chooseDeadline || now.getTime() < selection.chooseDeadline.getTime()) {
+      return null;
+    }
+    if (selection.songOptions.length === 0) {
+      // Nothing to pick from: cancel so the host can start a new selection.
+      return { ...room, songSelection: null };
+    }
+    const song = selection.songOptions[random(selection.songOptions.length)];
+    const chosen = SongSelectionService.choose(room, selection.chooserId, song.id);
+    return { ...chosen, songSelection: { ...chosen.songSelection!, autoPicked: true } };
   },
 
   /**
    * Passes the choice to someone else when the chooser leaves before picking.
    * `room` must already have the player removed.
    */
-  handlePlayerLeft(room: Room, playerId: string, random: RandomIndex = secureRandomIndex): Room {
+  handlePlayerLeft(
+    room: Room,
+    playerId: string,
+    random: RandomIndex = secureRandomIndex,
+    now: Date = new Date(),
+  ): Room {
     const selection = room.songSelection;
     if (!selection || selection.phase !== "choosing" || selection.chooserId !== playerId) return room;
-    return assignFallbackChooser(room, selection, "chooser-left", random);
+    return assignFallbackChooser(room, selection, "chooser-left", random, now);
   },
 };
 
@@ -195,6 +242,7 @@ function assignFallbackChooser(
   selection: SongSelection,
   reason: ChooserReason,
   random: RandomIndex,
+  now: Date,
 ): Room {
   const present = selection.participantIds.filter((id) => isPresent(room, id));
   const notFailed = present.filter((id) => !selection.failedIds.includes(id));
@@ -203,5 +251,16 @@ function assignFallbackChooser(
     return { ...room, songSelection: null };
   }
   const chooserId = candidates[random(candidates.length)];
-  return { ...room, songSelection: { ...selection, phase: "choosing", chooserId, chooserReason: reason } };
+  return { ...room, songSelection: choosing(selection, chooserId, reason, now) };
+}
+
+/** Hands the choice to `chooserId` with a fresh deadline (every chooser gets the full time). */
+function choosing(selection: SongSelection, chooserId: string, reason: ChooserReason, now: Date): SongSelection {
+  return {
+    ...selection,
+    phase: "choosing",
+    chooserId,
+    chooserReason: reason,
+    chooseDeadline: new Date(now.getTime() + selection.chooseMs),
+  };
 }
