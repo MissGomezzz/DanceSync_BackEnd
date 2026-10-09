@@ -35,6 +35,8 @@ import { AwardWordBonus } from "../src/application/usecases/AwardWordBonus.js";
 const OFFSETS_MS = [60, 800, 1400, 2000];
 const WINDOW_MS = 300;
 
+process.env.BATTLE_START_COUNTDOWN_MS = "0";
+
 type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 type SubmitAck = { outcome: string; winnerId: string | null };
 

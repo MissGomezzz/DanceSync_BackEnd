@@ -2,10 +2,10 @@ import type { Song } from "../model/Song.js";
 
 /** Songs the chooser can pick from. Replace with a catalog service when one exists. */
 export const SONG_CATALOG: readonly Song[] = [
-  { id: "song-1", title: "Dance Monkey", artist: "Tones and I", durationSeconds: 209 },
-  { id: "song-2", title: "Uptown Funk", artist: "Mark Ronson ft. Bruno Mars", durationSeconds: 270 },
-  { id: "song-3", title: "Bailando", artist: "Enrique Iglesias", durationSeconds: 243 },
-  { id: "song-4", title: "Levitating", artist: "Dua Lipa", durationSeconds: 203 },
-  { id: "song-5", title: "Despacito", artist: "Luis Fonsi ft. Daddy Yankee", durationSeconds: 229 },
-  { id: "song-6", title: "Can't Stop the Feeling!", artist: "Justin Timberlake", durationSeconds: 236 },
+  { id: "song-1", title: "Rasputin", artist: "Boney M.", durationSeconds: 180, youtubeId: "flS0SVqTGT0" },
+  { id: "song-2", title: "Beauty and a Beat", artist: "Justin Bieber", durationSeconds: 180, youtubeId: "ilp23H9dS_U" },
+  { id: "song-3", title: "Moves Like Jagger", artist: "Maroon 5", durationSeconds: 180, youtubeId: "rE7q1uhj4g4" },
+  { id: "song-4", title: "Call Me Maybe", artist: "Carly Rae Jepsen", durationSeconds: 180, youtubeId: "6DvEMAx5T9w" },
+  { id: "song-5", title: "Hot N Cold", artist: "Katy Perry", durationSeconds: 180, youtubeId: "UUeiSHQ8dSM" },
+  { id: "song-6", title: "Cotton Eye Joe", artist: "Rednex", durationSeconds: 180, youtubeId: "CicMt6tQqEQ" },
 ];

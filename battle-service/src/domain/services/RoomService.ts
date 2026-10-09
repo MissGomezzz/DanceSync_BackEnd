@@ -9,6 +9,8 @@ import { isSelectionInProgress, SongSelectionService } from "./SongSelectionServ
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_LENGTH = 6;
+const DEFAULT_START_COUNTDOWN_MS = 5000;
+
 
 export function generateRoomCode(): string {
   const bytes = randomBytes(ROOM_CODE_LENGTH);
@@ -46,6 +48,11 @@ export function requireRoomCode(code: unknown): string {
     throw new DomainError("ROOM_NOT_FOUND", "A room code is required");
   }
   return code.trim();
+}
+
+function startCountdownMs(): number {
+  const fromEnv = process.env.BATTLE_START_COUNTDOWN_MS;
+  return fromEnv === undefined ? DEFAULT_START_COUNTDOWN_MS : Number(fromEnv);
 }
 
 const PLAYABLE_ROLES: readonly string[] = ["dancer", "spectator"] satisfies PlayerRole[];
@@ -200,7 +207,7 @@ export const RoomService = {
       song: room.selectedSong,
       ratings: [],
       bonusPoints: Object.fromEntries(dancers.map((d) => [d.id, 0])),
-      startedAt: new Date(),
+      startedAt: new Date(Date.now() + startCountdownMs()),
       finishedAt: null,
       result: null,
     };
