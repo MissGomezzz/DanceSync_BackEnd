@@ -46,6 +46,8 @@ export function loadEnv(source: Source = process.env) {
     songChooseMs: read("SONG_CHOOSE_MS", 20_000, "positive"),
     /** Countdown between the battle start and the moment dancing (and rating) begins. */
     battleStartCountdownMs: read("BATTLE_START_COUNTDOWN_MS", 5_000, "non-negative"),
+    /** Time spectators keep to rate after the song ends; then the battle finishes on its own. */
+    ratingGraceMs: read("RATING_GRACE_MS", 30_000, "non-negative"),
     /** Word race rounds per battle (fewer when the song is too short to fit them). */
     wordRaceRounds: read("WORD_RACE_ROUNDS", 3, "non-negative-integer"),
     /** Time dancers have to type each word-race word. */
@@ -54,7 +56,10 @@ export function loadEnv(source: Source = process.env) {
     wordRaceMinGapMs: read("WORD_RACE_MIN_GAP_MS", 12_000, "non-negative"),
     /** Points a dancer earns for winning a word round, added to the battle score. */
     wordBonusPoints: read("WORD_BONUS_POINTS", 1, "positive-integer"),
-    /** Song length assumed for the word-race timeline when the battle has no song. */
+    /**
+     * Song length assumed when the battle has no song: for the word-race timeline
+     * and for the moment the battle finishes on its own.
+     */
     wordRaceFallbackDurationMs: read("WORD_RACE_FALLBACK_DURATION_MS", 90_000, "positive"),
   } as const;
 }

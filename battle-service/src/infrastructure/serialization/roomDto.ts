@@ -19,6 +19,8 @@ export interface SongSelectionDto extends Omit<SongSelection, "challenge"> {
 export interface BattleDto extends Battle {
   /** Time until the dancing begins; negative once it began (elapsed time). */
   startsInMs: number;
+  /** Time until the battle finishes on its own (battle.endsAt) while it runs; null once finished. */
+  endsInMs: number | null;
 }
 
 export interface RoomDto extends Omit<Room, "songSelection" | "battle"> {
@@ -49,7 +51,13 @@ export function toRoomDto(room: Room, now: Date): RoomDto {
               : null,
         }
       : null,
-    battle: battle ? { ...battle, startsInMs: battle.startedAt.getTime() - at } : null,
+    battle: battle
+      ? {
+          ...battle,
+          startsInMs: battle.startedAt.getTime() - at,
+          endsInMs: room.status === "battling" ? battle.endsAt.getTime() - at : null,
+        }
+      : null,
   };
 }
 

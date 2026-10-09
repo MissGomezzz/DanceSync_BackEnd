@@ -6,6 +6,7 @@ import type { StartBattle } from "../../application/usecases/StartBattle.js";
 import type { SelectRole } from "../../application/usecases/SelectRole.js";
 import type { SetReady } from "../../application/usecases/SetReady.js";
 import type { ChooseSong } from "../../application/usecases/ChooseSong.js";
+import type { FinishBattleAtDeadline } from "../../application/usecases/FinishBattleAtDeadline.js";
 import type { StartSongChallenge } from "../../application/usecases/StartSongChallenge.js";
 import type { SubmitSongPhrase } from "../../application/usecases/SubmitSongPhrase.js";
 import type { GetActiveWordRound } from "../../application/usecases/GetActiveWordRound.js";
@@ -41,6 +42,8 @@ export interface SocketDependencies {
   startSongChallenge: StartSongChallenge;
   submitSongPhrase: SubmitSongPhrase;
   chooseSong: ChooseSong;
+  /** Ends a battle still running at battle.endsAt (song clip plus rating grace). */
+  finishBattleAtDeadline: FinishBattleAtDeadline;
   /** Seat retention after a disconnect, see env.disconnectGraceMs. */
   disconnectGraceMs: number;
   /** Mid-battle word race. Optional so harnesses that do not exercise it can omit it. */
@@ -102,6 +105,21 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     } else {
       roomTimers.clear(room.code, "song-choose");
     }
+    // The automatic end of the battle: song clip plus rating grace.
+    if (room.status === "battling" && room.battle) {
+      const battleId = room.battle.id;
+      roomTimers.set(room.code, "battle-end", room.battle.endsAt, () => finishBattleAtDeadline(room.code, battleId));
+    } else {
+      roomTimers.clear(room.code, "battle-end");
+    }
+  }
+
+  async function finishBattleAtDeadline(roomCode: string, battleId: string): Promise<void> {
+    const result = await deps.finishBattleAtDeadline.execute({ roomCode, battleId });
+    if (!result) return; // Room gone.
+    if (result.finished) await announceBattleFinished(result.room);
+    // Fired a moment early: follow the stored state (re-arms only if still running).
+    else armRoomTimers(result.room);
   }
 
   async function autoPickSong(roomCode: string, challengeId: string): Promise<void> {
@@ -138,7 +156,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
   /**
    * Single exit for every path that finishes a battle (last rating, leave,
-   * released seat): room:updated, then battle:finished, then every battle timer stops.
+   * released seat, deadline): room:updated, then battle:finished, then every
+   * battle timer stops (publishRoom clears the battle-end deadline).
    */
   async function announceBattleFinished(room: Room): Promise<void> {
     publishRoom(room);

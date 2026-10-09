@@ -1,9 +1,10 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { DomainError } from "../errors/DomainError.js";
-import type { Battle, BattleResult } from "../model/Battle.js";
+import { DEFAULT_RATING_GRACE_MS, type Battle, type BattleResult } from "../model/Battle.js";
 import { MAX_DISPLAY_NAME_LENGTH, MAX_PLAYER_ID_LENGTH, type Player, type PlayerRole } from "../model/Player.js";
 import { MAX_SCORE, MIN_SCORE, type Rating } from "../model/Rating.js";
 import { MAX_PLAYERS, MIN_DANCERS_PER_BATTLE, type Room } from "../model/Room.js";
+import { DEFAULT_WORD_FALLBACK_DURATION_MS } from "../model/WordRace.js";
 import { requireEveryoneReady } from "./readiness.js";
 import { isSelectionInProgress, secureRandomIndex, SongSelectionService } from "./SongSelectionService.js";
 
@@ -22,6 +23,10 @@ export interface StartBattleOptions {
   now?: Date;
   /** Delay between the start command and battle.startedAt, in ms (0 or more). */
   countdownMs?: number;
+  /** Time spectators keep to rate once the song ends, in ms (0 or more). */
+  ratingGraceMs?: number;
+  /** Song length assumed when the battle has no song, in ms. */
+  fallbackDurationMs?: number;
 }
 
 export function generateRoomCode(): string {
@@ -172,9 +177,18 @@ export const RoomService = {
    * already be chosen (SongSelectionService).
    */
   startBattle(room: Room, dancerIds?: string[], options: StartBattleOptions = {}): Room {
-    const { now = new Date(), countdownMs = DEFAULT_START_COUNTDOWN_MS } = options;
-    if (!Number.isFinite(countdownMs) || countdownMs < 0) {
-      throw new RangeError(`The start countdown must be 0 ms or more, received ${countdownMs}`);
+    const {
+      now = new Date(),
+      countdownMs = DEFAULT_START_COUNTDOWN_MS,
+      ratingGraceMs = DEFAULT_RATING_GRACE_MS,
+      fallbackDurationMs = DEFAULT_WORD_FALLBACK_DURATION_MS,
+    } = options;
+    for (const [name, value] of [
+      ["start countdown", countdownMs],
+      ["rating grace", ratingGraceMs],
+      ["fallback song length", fallbackDurationMs],
+    ] as const) {
+      if (!Number.isFinite(value) || value < 0) throw new RangeError(`The ${name} must be 0 ms or more, received ${value}`);
     }
     if (room.status !== "waiting") {
       throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} already started`);
@@ -211,6 +225,8 @@ export const RoomService = {
       const isDancer = dancers.some((d) => d.id === p.id);
       return isDancer ? { ...p, role: "dancer" as const } : { ...p, role: "spectator" as const };
     });
+    const startedAt = now.getTime() + countdownMs;
+    const songMs = room.selectedSong ? room.selectedSong.durationSeconds * 1000 : fallbackDurationMs;
     const battle: Battle = {
       id: randomUUID(),
       roomCode: room.code,
@@ -219,7 +235,8 @@ export const RoomService = {
       song: room.selectedSong,
       ratings: [],
       bonusPoints: Object.fromEntries(dancers.map((d) => [d.id, 0])),
-      startedAt: new Date(now.getTime() + countdownMs),
+      startedAt: new Date(startedAt),
+      endsAt: new Date(startedAt + songMs + ratingGraceMs),
       finishedAt: null,
       result: null,
     };
@@ -311,7 +328,7 @@ export const RoomService = {
    * dancer received before leaving stay in battle.ratings as history but do not
    * appear in the result. Ratings from spectators who left still count.
    */
-  finishBattle(room: Room): Room {
+  finishBattle(room: Room, now: Date = new Date()): Room {
     if (room.status !== "battling" || !room.battle) {
       throw new DomainError("ROOM_NOT_BATTLING", `Room ${room.code} has no battle in progress`);
     }
@@ -327,8 +344,27 @@ export const RoomService = {
     return {
       ...room,
       status: "finished",
-      battle: { ...room.battle, finishedAt: new Date(), result },
+      battle: { ...room.battle, finishedAt: now, result },
     };
+  },
+
+  /**
+   * Finishes a battle still running at battle.endsAt (the song clip plus the
+   * rating grace period), so it ends even with no spectators, after the last
+   * spectator left, or with spectators who never rate. The result is computed
+   * as usual over the remaining dancers from whatever was collected (ratings
+   * plus word bonus); with nothing collected there is no result (null).
+   * Returns the very same room when there is nothing to do (not battling, or
+   * the deadline is not reached yet).
+   */
+  finishAtDeadline(room: Room, now: Date): Room {
+    const battle = room.battle;
+    if (room.status !== "battling" || !battle || now.getTime() < battle.endsAt.getTime()) return room;
+    const collected =
+      battle.ratings.some((r) => battle.dancerIds.includes(r.dancerId)) ||
+      battle.dancerIds.some((id) => (battle.bonusPoints[id] ?? 0) > 0);
+    if (collected) return RoomService.finishBattle(room, now);
+    return { ...room, status: "finished", battle: { ...battle, finishedAt: now, result: null } };
   },
 };
 /**

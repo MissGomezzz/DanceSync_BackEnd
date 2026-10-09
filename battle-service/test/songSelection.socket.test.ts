@@ -5,6 +5,7 @@ import { after, before, describe, it } from "node:test";
 import { Server } from "socket.io";
 import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { ChooseSong } from "../src/application/usecases/ChooseSong.js";
+import { FinishBattleAtDeadline } from "../src/application/usecases/FinishBattleAtDeadline.js";
 import { CreateRoom } from "../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
 import { RateDancer } from "../src/application/usecases/RateDancer.js";
@@ -90,6 +91,7 @@ before(async () => {
     startSongChallenge: new StartSongChallenge(rooms, { durationMs: CHALLENGE_MS, phrases: [PHRASE] }),
     submitSongPhrase: new SubmitSongPhrase(rooms, () => 0),
     chooseSong: new ChooseSong(rooms),
+    finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
     disconnectGraceMs: 50,
   });
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));

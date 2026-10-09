@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
 import { CreateRoom } from "./application/usecases/CreateRoom.js";
+import { FinishBattleAtDeadline } from "./application/usecases/FinishBattleAtDeadline.js";
 import { JoinRoom } from "./application/usecases/JoinRoom.js";
 import { RateDancer } from "./application/usecases/RateDancer.js";
 import { SendChatMessage } from "./application/usecases/SendChatMessage.js";
@@ -32,7 +33,11 @@ const rooms = new InMemoryRoomRepository();
 const wordRaces = new InMemoryWordRaceRepository();
 const createRoom = new CreateRoom(rooms);
 const joinRoom = new JoinRoom(rooms);
-const battleTiming = { countdownMs: env.battleStartCountdownMs };
+const battleTiming = {
+  countdownMs: env.battleStartCountdownMs,
+  ratingGraceMs: env.ratingGraceMs,
+  fallbackDurationMs: env.wordRaceFallbackDurationMs,
+};
 const startBattle = new StartBattle(rooms, battleTiming);
 const sendChatMessage = new SendChatMessage(rooms);
 const rateDancer = new RateDancer(rooms);
@@ -78,6 +83,7 @@ registerSocketHandlers(io, {
   startSongChallenge,
   submitSongPhrase,
   chooseSong,
+  finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
   disconnectGraceMs: env.disconnectGraceMs,
   wordRace: {
     scheduler: wordRaceScheduler,

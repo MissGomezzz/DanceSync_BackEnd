@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { Server } from "socket.io";
 import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { ChooseSong } from "../../src/application/usecases/ChooseSong.js";
+import { FinishBattleAtDeadline } from "../../src/application/usecases/FinishBattleAtDeadline.js";
 import { CreateRoom } from "../../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../../src/application/usecases/JoinRoom.js";
 import { RateDancer } from "../../src/application/usecases/RateDancer.js";
@@ -54,6 +55,7 @@ export class SocketHarness {
       startSongChallenge: new StartSongChallenge(this.rooms, options.songChallenge),
       submitSongPhrase: new SubmitSongPhrase(this.rooms),
       chooseSong: new ChooseSong(this.rooms),
+      finishBattleAtDeadline: new FinishBattleAtDeadline(this.rooms),
       disconnectGraceMs: options.disconnectGraceMs ?? 50,
       ...options.extend?.(this.rooms),
     });

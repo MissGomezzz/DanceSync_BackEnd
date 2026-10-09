@@ -1,6 +1,9 @@
 import type { Rating } from "./Rating.js";
 import type { Song } from "./Song.js";
 
+/** Time spectators keep to rate after the song ends, unless configured otherwise. */
+export const DEFAULT_RATING_GRACE_MS = 30_000;
+
 export interface BattleResult {
   /** Total per dancer: the spectators' ratings plus the word race bonus. */
   scores: Record<string, number>;
@@ -32,7 +35,14 @@ export interface Battle {
    * added to the ratings when the battle finishes and are visible while it runs.
    */
   bonusPoints: Record<string, number>;
+  /** When the dancing begins (the start command plus the countdown). */
   startedAt: Date;
+  /**
+   * When the battle finishes on its own if it is still running: the end of the
+   * song clip plus the rating grace period. Without it a battle with no
+   * spectators (or whose last spectator left) could never finish.
+   */
+  endsAt: Date;
   finishedAt: Date | null;
   result: BattleResult | null;
 }
