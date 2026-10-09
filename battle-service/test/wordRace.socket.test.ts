@@ -32,8 +32,8 @@ import type { Room } from "../src/domain/model/Room.js";
 import { AwardWordBonus } from "../src/application/usecases/AwardWordBonus.js";
 
 /** Round openings (ms after the battle starts) and window, shrunk so the test runs in about a second. */
-const OFFSETS_MS = [60, 800, 1400, 2000];
-const WINDOW_MS = 300;
+const OFFSETS_MS = [100, 1400, 2700, 4000];
+const WINDOW_MS = 1000;
 
 process.env.BATTLE_START_COUNTDOWN_MS = "0";
 
