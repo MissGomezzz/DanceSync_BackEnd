@@ -215,6 +215,7 @@ export const RoomService = {
       id: randomUUID(),
       roomCode: room.code,
       dancerIds: dancers.map((d) => d.id),
+      roster: dancers.map((d) => ({ id: d.id, displayName: d.displayName })),
       song: room.selectedSong,
       ratings: [],
       bonusPoints: Object.fromEntries(dancers.map((d) => [d.id, 0])),

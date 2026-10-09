@@ -1,5 +1,5 @@
 import type { ChatMessage } from "../../domain/model/ChatMessage.js";
-import type { Room } from "../../domain/model/Room.js";
+import type { RoomDto } from "../serialization/roomDto.js";
 import type { SubmitWordOutcome } from "../../domain/model/WordRace.js";
 import type { SubmitOutcome } from "../../domain/services/SongSelectionService.js";
 
@@ -76,7 +76,7 @@ export interface SongChallengeSubmitPayload {
 }
 
 export interface SongChallengeSubmitResult {
-  room: Room;
+  room: RoomDto;
   /** accepted: won the right to choose; incorrect: misspelled; expired: sent after the countdown. */
   outcome: SubmitOutcome;
 }
@@ -184,29 +184,29 @@ export interface DomainErrorPayload {
 export type Ack<T> = (response: { ok: true; data: T } | { ok: false; error: DomainErrorPayload }) => void;
 
 export interface ClientToServerEvents {
-  [ClientEvents.ROOM_JOIN]: (payload: RoomJoinPayload, ack?: Ack<Room>) => void;
-  [ClientEvents.ROOM_LEAVE]: (payload: RoomLeavePayload, ack?: Ack<Room | null>) => void;
-  [ClientEvents.BATTLE_START]: (payload: BattleStartPayload, ack?: Ack<Room>) => void;
+  [ClientEvents.ROOM_JOIN]: (payload: RoomJoinPayload, ack?: Ack<RoomDto>) => void;
+  [ClientEvents.ROOM_LEAVE]: (payload: RoomLeavePayload, ack?: Ack<RoomDto | null>) => void;
+  [ClientEvents.BATTLE_START]: (payload: BattleStartPayload, ack?: Ack<RoomDto>) => void;
   [ClientEvents.CHAT_MESSAGE]: (payload: ChatMessagePayload, ack?: Ack<ChatMessage>) => void;
-  [ClientEvents.RATING_SUBMIT]: (payload: RatingSubmitPayload, ack?: Ack<Room>) => void;
+  [ClientEvents.RATING_SUBMIT]: (payload: RatingSubmitPayload, ack?: Ack<RoomDto>) => void;
   [ClientEvents.WEBRTC_READY]: (payload: WebRtcReadyPayload, ack?: Ack<null>) => void;
   [ClientEvents.WEBRTC_SIGNAL]: (payload: WebRtcSignalPayload, ack?: Ack<null>) => void;
-  [ClientEvents.ROLE_SELECT]: (payload: RoleSelectPayload, ack?: Ack<Room>) => void;
-  [ClientEvents.PLAYER_READY]: (payload: PlayerReadyPayload, ack?: Ack<Room>) => void;
-  [ClientEvents.SONG_CHALLENGE_START]: (payload: SongChallengeStartPayload, ack?: Ack<Room>) => void;
+  [ClientEvents.ROLE_SELECT]: (payload: RoleSelectPayload, ack?: Ack<RoomDto>) => void;
+  [ClientEvents.PLAYER_READY]: (payload: PlayerReadyPayload, ack?: Ack<RoomDto>) => void;
+  [ClientEvents.SONG_CHALLENGE_START]: (payload: SongChallengeStartPayload, ack?: Ack<RoomDto>) => void;
   [ClientEvents.SONG_CHALLENGE_SUBMIT]: (
     payload: SongChallengeSubmitPayload,
     ack?: Ack<SongChallengeSubmitResult>,
   ) => void;
-  [ClientEvents.SONG_CHOOSE]: (payload: SongChoosePayload, ack?: Ack<Room>) => void;
+  [ClientEvents.SONG_CHOOSE]: (payload: SongChoosePayload, ack?: Ack<RoomDto>) => void;
   [ClientEvents.WORD_SUBMIT]: (payload: WordSubmitPayload, ack?: Ack<WordSubmitResult>) => void;
 }
 
 export interface ServerToClientEvents {
-  [ServerEvents.ROOM_UPDATED]: (room: Room) => void;
-  [ServerEvents.BATTLE_STARTED]: (room: Room) => void;
+  [ServerEvents.ROOM_UPDATED]: (room: RoomDto) => void;
+  [ServerEvents.BATTLE_STARTED]: (room: RoomDto) => void;
   [ServerEvents.CHAT_MESSAGE]: (message: ChatMessage) => void;
-  [ServerEvents.BATTLE_FINISHED]: (room: Room) => void;
+  [ServerEvents.BATTLE_FINISHED]: (room: RoomDto) => void;
   [ServerEvents.WEBRTC_PEER_READY]: (payload: WebRtcPeerReadyPayload) => void;
   [ServerEvents.WEBRTC_SIGNAL]: (payload: WebRtcSignalPayload) => void;
   [ServerEvents.WORD_ROUND_STARTED]: (payload: WordRoundStartedPayload) => void;

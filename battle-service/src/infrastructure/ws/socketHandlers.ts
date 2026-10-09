@@ -13,7 +13,9 @@ import type { AwardWordBonus } from "../../application/usecases/AwardWordBonus.j
 import type { SubmitWord } from "../../application/usecases/SubmitWord.js";
 import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
+import { RoomTimers } from "../scheduling/RoomTimers.js";
 import type { WordRaceScheduler } from "../scheduling/WordRaceScheduler.js";
+import { toRoomDto, toRoomDtoOrNull } from "../serialization/roomDto.js";
 import { roundEndedPayload, roundStartedPayload } from "./wordRaceMessages.js";
 import {
   ClientEvents,
@@ -55,6 +57,8 @@ export interface WordRaceSocketDependencies {
 /** Lets the owner stop every timer the handlers own (tests, graceful shutdown). */
 export interface SocketHandlersHandle {
   close(): void;
+  /** Deadline timers per room (song challenge, ...), exposed so tests can prove nothing leaks. */
+  readonly roomTimers: RoomTimers;
 }
 
 export function registerSocketHandlers(io: BattleServer, deps: SocketDependencies): SocketHandlersHandle {
@@ -64,6 +68,77 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    * never release a seat that a later reconnect renewed.
    */
   const graceTimers = new Map<string, NodeJS.Timeout>();
+  const roomTimers = new RoomTimers();
+
+  /**
+   * Single exit for every room:updated: serializes the room (relative times
+   * computed now) and re-arms the room's deadline timers from the stored state,
+   * so a deadline can never be left without a timer, whatever path changed it.
+   */
+  function publishRoom(room: Room): void {
+    io.to(room.code).emit(ServerEvents.ROOM_UPDATED, toRoomDto(room, new Date()));
+    armRoomTimers(room);
+  }
+
+  /** Derives the pending deadlines of a room from its state; anything not pending is cleared. */
+  function armRoomTimers(room: Room): void {
+    const selection = room.songSelection;
+    if (room.status === "waiting" && selection?.phase === "typing") {
+      const challengeId = selection.challenge.id;
+      // The server owns the countdown: when it runs out the round is resolved
+      // with the fallback rule even if no client submits anything.
+      roomTimers.set(room.code, "song-challenge", selection.challenge.expiresAt, () =>
+        expireSongChallenge(room.code, challengeId),
+      );
+    } else {
+      roomTimers.clear(room.code, "song-challenge");
+    }
+  }
+
+  async function expireSongChallenge(roomCode: string, challengeId: string): Promise<void> {
+    const room = await deps.startSongChallenge.expire({ roomCode, challengeId });
+    if (room) publishRoom(room);
+  }
+
+  /** Single exit for every path that starts a battle: the host's start or the chosen song. */
+  function announceBattleStarted(room: Room): void {
+    io.to(room.code).emit(ServerEvents.BATTLE_STARTED, toRoomDto(room, new Date()));
+    publishRoom(room);
+    // The battle already started; a failure planning the word race must not undo it.
+    deps.wordRace?.scheduler
+      .start(room.code)
+      .catch((error: unknown) => console.error("Error starting the word race", error));
+  }
+
+  /**
+   * Single exit for every path that finishes a battle (last rating, leave,
+   * released seat): room:updated, then battle:finished, then every battle timer stops.
+   */
+  async function announceBattleFinished(room: Room): Promise<void> {
+    publishRoom(room);
+    io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, toRoomDto(room, new Date()));
+    await deps.wordRace?.scheduler.stop(room.code);
+  }
+
+  /**
+   * Broadcasts the outcome of a departure (explicit room:leave or a seat released
+   * after the disconnect grace period). The departure may have finished the
+   * battle, which is announced like a battle finished by the last rating.
+   */
+  async function announceLeave(roomCode: string, { room, battleFinished }: LeaveRoomOutput): Promise<void> {
+    if (!room) {
+      // The last player left: the room is gone, and so is every timer it had.
+      roomTimers.clearRoom(roomCode);
+      await deps.wordRace?.scheduler.stop(roomCode);
+      return;
+    }
+    if (battleFinished) {
+      await announceBattleFinished(room);
+      return;
+    }
+    publishRoom(room);
+    if (room.status !== "battling") await deps.wordRace?.scheduler.stop(room.code);
+  }
 
   function cancelGrace(roomCode: string, playerId: string): void {
     const key = seatKey(roomCode, playerId);
@@ -100,7 +175,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     const left = await deps.joinRoom.leave({ roomCode, playerId });
     cancelGrace(roomCode, playerId);
     await unbindPlayer(roomCode, playerId);
-    await announceLeave(io, deps, roomCode, left);
+    await announceLeave(roomCode, left);
     return left;
   }
 
@@ -154,9 +229,9 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         socket.data.roomCode = room.code;
         await socket.join(room.code);
         await socket.join(playerChannel(playerId));
-        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
+        publishRoom(room);
         if (room.status === "battling") await resyncWordRound(socket, deps, room.code);
-        return room;
+        return toRoomDto(room, new Date());
       }),
     );
 
@@ -164,8 +239,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const room = await deps.selectRole.execute({ ...payload, roomCode });
-        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        return room;
+        publishRoom(room);
+        return toRoomDto(room, new Date());
       }),
     );
 
@@ -173,8 +248,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const room = await deps.setReady.execute({ ...payload, roomCode });
-        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        return room;
+        publishRoom(room);
+        return toRoomDto(room, new Date());
       }),
     );
 
@@ -182,7 +257,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const left = await leaveRoom(roomCode, payload.playerId);
-        return left.room;
+        return toRoomDtoOrNull(left.room, new Date());
       }),
     );
 
@@ -190,8 +265,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
         const room = await deps.startBattle.execute({ ...payload, roomCode });
-        announceBattleStarted(io, deps, room);
-        return room;
+        announceBattleStarted(room);
+        return toRoomDto(room, new Date());
       }),
     );
 
@@ -208,7 +283,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
             ServerEvents.WORD_ROUND_ENDED,
             roundEndedPayload(result.race, result.round, bonus ? deps.wordRace.awardWordBonus.points : 0),
           );
-          if (bonus) io.to(roomCode).emit(ServerEvents.ROOM_UPDATED, bonus);
+          if (bonus) publishRoom(bonus);
         }
         return { outcome: result.outcome, winnerId: result.round.winnerId };
       }),
@@ -218,13 +293,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
         const room = await deps.startSongChallenge.execute({ ...payload, roomCode });
-        const challenge = room.songSelection!.challenge;
-        // The server owns the countdown: when it runs out the round is resolved
-        // with the fallback rule even if no client submits anything.
-        const delay = Math.max(0, challenge.expiresAt.getTime() - Date.now());
-        setTimeout(() => void expireSongChallenge(io, deps, room.code, challenge.id), delay);
-        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        return room;
+        publishRoom(room);
+        return toRoomDto(room, new Date());
       }),
     );
 
@@ -232,8 +302,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const result = await deps.submitSongPhrase.execute({ ...payload, roomCode });
-        io.to(result.room.code).emit(ServerEvents.ROOM_UPDATED, result.room);
-        return result;
+        publishRoom(result.room);
+        return { room: toRoomDto(result.room, new Date()), outcome: result.outcome };
       }),
     );
 
@@ -241,9 +311,9 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const { room, battleStarted } = await deps.chooseSong.execute({ ...payload, roomCode });
-        if (battleStarted) announceBattleStarted(io, deps, room);
-        else io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        return room;
+        if (battleStarted) announceBattleStarted(room);
+        else publishRoom(room);
+        return toRoomDto(room, new Date());
       }),
     );
 
@@ -260,9 +330,9 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       guard(socket, ack, async () => {
         const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.raterId);
         const { room, finished } = await deps.rateDancer.execute({ ...payload, roomCode });
-        io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-        if (finished) await announceBattleFinished(io, deps, room);
-        return room;
+        if (finished) await announceBattleFinished(room);
+        else publishRoom(room);
+        return toRoomDto(room, new Date());
       }),
     );
 
@@ -300,9 +370,11 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   });
 
   return {
+    roomTimers,
     close() {
       for (const timer of graceTimers.values()) clearTimeout(timer);
       graceTimers.clear();
+      roomTimers.close();
     },
   };
 }
@@ -318,67 +390,6 @@ async function unbindSocket(socket: BattleSocket): Promise<void> {
   socket.data.playerId = undefined;
   if (roomCode) await socket.leave(roomCode);
   if (playerId) await socket.leave(playerChannel(playerId));
-}
-
-async function expireSongChallenge(
-  io: BattleServer,
-  deps: SocketDependencies,
-  roomCode: string,
-  challengeId: string,
-): Promise<void> {
-  try {
-    const room = await deps.startSongChallenge.expire({ roomCode, challengeId });
-    if (room) io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-  } catch (error) {
-    console.error("Error expiring song challenge", error);
-  }
-}
-
-/**
- * Broadcasts the outcome of a departure (explicit room:leave or a seat released
- * after the disconnect grace period). The departure may have finished the
- * battle, which is announced like a battle finished by the last rating.
- */
-async function announceLeave(
-  io: BattleServer,
-  deps: SocketDependencies,
-  roomCode: string,
-  { room, battleFinished }: LeaveRoomOutput,
-): Promise<void> {
-  if (room) {
-    io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-    if (battleFinished) {
-      await announceBattleFinished(io, deps, room);
-      return;
-    }
-  }
-  await stopWordRaceUnlessBattling(deps, roomCode, room);
-}
-
-/** Single exit for every path that starts a battle: the host's start or the chosen song. */
-function announceBattleStarted(io: BattleServer, deps: SocketDependencies, room: Room): void {
-  io.to(room.code).emit(ServerEvents.BATTLE_STARTED, room);
-  io.to(room.code).emit(ServerEvents.ROOM_UPDATED, room);
-  // The battle already started; a failure planning the word race must not undo it.
-  deps.wordRace?.scheduler
-    .start(room.code)
-    .catch((error: unknown) => console.error("Error starting the word race", error));
-}
-
-/** Single exit for every path that finishes a battle: rating, leave or released seat. */
-async function announceBattleFinished(io: BattleServer, deps: SocketDependencies, room: Room): Promise<void> {
-  io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, room);
-  await deps.wordRace?.scheduler.stop(room.code);
-}
-
-/** A leave can delete the room; the race must stop with it. */
-async function stopWordRaceUnlessBattling(
-  deps: SocketDependencies,
-  roomCode: string,
-  room: Room | null,
-): Promise<void> {
-  if (!deps.wordRace || room?.status === "battling") return;
-  await deps.wordRace.scheduler.stop(room?.code ?? roomCode);
 }
 
 /**

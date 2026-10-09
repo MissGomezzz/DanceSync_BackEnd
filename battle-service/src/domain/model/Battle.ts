@@ -8,10 +8,22 @@ export interface BattleResult {
   winnerId: string | null;
 }
 
+/** A dancer as they were when the battle started. */
+export interface RosterEntry {
+  id: string;
+  displayName: string;
+}
+
 export interface Battle {
   id: string;
   roomCode: string;
+  /** Dancers still competing; a dancer who leaves is dropped from this list. */
   dancerIds: string[];
+  /**
+   * Every dancer of the battle, snapshotted at the start and never shrunk, so the
+   * names of dancers who left stay available (results, history, word race).
+   */
+  roster: RosterEntry[];
   /** Song picked in the lobby, or null when the battle started without one. */
   song: Song | null;
   ratings: Rating[];

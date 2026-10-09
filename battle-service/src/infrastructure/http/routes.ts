@@ -2,6 +2,7 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import type { CreateRoom } from "../../application/usecases/CreateRoom.js";
 import { DomainError, type DomainErrorCode } from "../../domain/errors/DomainError.js";
 import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
+import { toRoomDto } from "../serialization/roomDto.js";
 
 export interface HttpDependencies {
   createRoom: CreateRoom;
@@ -49,7 +50,7 @@ export function buildRouter(deps: HttpDependencies): Router {
       // CreateRoom validates both fields and answers INVALID_PLAYER (400) otherwise.
       const { hostId, displayName } = (req.body ?? {}) as { hostId: string; displayName: string };
       const room = await deps.createRoom.execute({ hostId, displayName });
-      res.status(201).location(`/api/rooms/${room.code}`).json(room);
+      res.status(201).location(`/api/rooms/${room.code}`).json(toRoomDto(room, new Date()));
     } catch (error) {
       next(error);
     }
@@ -62,7 +63,7 @@ export function buildRouter(deps: HttpDependencies): Router {
         res.status(404).json({ error: `Room ${req.params.code} does not exist` });
         return;
       }
-      res.json(room);
+      res.json(toRoomDto(room, new Date()));
     } catch (error) {
       next(error);
     }
