@@ -10,7 +10,8 @@ import { KickPlayer } from "../src/application/usecases/KickPlayer.js";
 import { ReapRooms } from "../src/application/usecases/ReapRooms.js";
 import { CreateRoom } from "../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
-import { RateDancer } from "../src/application/usecases/RateDancer.js";
+import { CastVote } from "../src/application/usecases/CastVote.js";
+import { StartRematch } from "../src/application/usecases/StartRematch.js";
 import { SelectRole } from "../src/application/usecases/SelectRole.js";
 import { SetReady } from "../src/application/usecases/SetReady.js";
 import { SendChatMessage } from "../src/application/usecases/SendChatMessage.js";
@@ -98,7 +99,8 @@ before(async () => {
     selectRole: new SelectRole(rooms),
     setReady: new SetReady(rooms),
     sendChatMessage: new SendChatMessage(rooms),
-    rateDancer: new RateDancer(rooms),
+    castVote: new CastVote(rooms),
+    startRematch: new StartRematch(rooms),
     startSongChallenge: new StartSongChallenge(rooms, { durationMs: 300 }),
     submitSongPhrase: new SubmitSongPhrase(rooms),
     chooseSong: new ChooseSong(rooms),
@@ -173,17 +175,15 @@ describe("Socket identity: every client event acts as the player bound by room:j
     assert.equal(message.senderName, "Fan");
   });
 
-  it("rating:submit cannot rate on behalf of a spectator", async () => {
+  it("vote:cast cannot vote on behalf of a spectator", async () => {
     const { code, guest, fan } = await battle();
     // A dancer impersonating the spectator to boost themselves.
-    await rejected(guest, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "guest", score: 5 }, "PLAYER_NOT_IN_ROOM");
-    assert.equal((await storedRoom(code)).battle?.ratings.length, 0);
+    await rejected(guest, "vote:cast", { roomCode: code, voterId: "fan", dancerId: "guest" }, "PLAYER_NOT_IN_ROOM");
+    assert.deepEqual((await storedRoom(code)).battle?.votes, {});
 
-    const room = await ok<Room>(fan, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "guest", score: 4 });
-    assert.deepEqual(
-      room.battle?.ratings.map((r) => [r.raterId, r.dancerId, r.score]),
-      [["fan", "guest", 4]],
-    );
+    const vote = await ok<{ dancerId: string | null }>(fan, "vote:cast", { roomCode: code, voterId: "fan", dancerId: "guest" });
+    assert.deepEqual(vote, { dancerId: "guest" });
+    assert.deepEqual((await storedRoom(code)).battle?.votes, { fan: "guest" });
   });
 
   it("a socket cannot act in a room it did not join, even with a real player id", async () => {

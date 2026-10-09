@@ -10,7 +10,8 @@ import { KickPlayer } from "../src/application/usecases/KickPlayer.js";
 import { ReapRooms } from "../src/application/usecases/ReapRooms.js";
 import { CreateRoom } from "../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
-import { RateDancer } from "../src/application/usecases/RateDancer.js";
+import { CastVote } from "../src/application/usecases/CastVote.js";
+import { StartRematch } from "../src/application/usecases/StartRematch.js";
 import { SelectRole } from "../src/application/usecases/SelectRole.js";
 import { SetReady } from "../src/application/usecases/SetReady.js";
 import { SendChatMessage } from "../src/application/usecases/SendChatMessage.js";
@@ -90,7 +91,8 @@ before(async () => {
     selectRole: new SelectRole(rooms),
     setReady: new SetReady(rooms),
     sendChatMessage: new SendChatMessage(rooms),
-    rateDancer: new RateDancer(rooms),
+    castVote: new CastVote(rooms),
+    startRematch: new StartRematch(rooms),
     startSongChallenge: new StartSongChallenge(rooms, { durationMs: CHALLENGE_MS, phrases: [PHRASE] }),
     submitSongPhrase: new SubmitSongPhrase(rooms, () => 0),
     chooseSong: new ChooseSong(rooms),

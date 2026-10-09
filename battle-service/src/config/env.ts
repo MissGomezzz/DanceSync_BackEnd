@@ -44,17 +44,17 @@ export function loadEnv(source: Source = process.env) {
     songChallengeMs: read("SONG_CHALLENGE_MS", 15_000, "positive"),
     /** Time the chooser has to pick a song before the server picks one at random. */
     songChooseMs: read("SONG_CHOOSE_MS", 20_000, "positive"),
-    /** Countdown between the battle start and the moment dancing (and rating) begins. */
+    /** Countdown between the battle start and the moment dancing (and voting) begins. */
     battleStartCountdownMs: read("BATTLE_START_COUNTDOWN_MS", 5_000, "non-negative"),
-    /** Time spectators keep to rate after the song ends; then the battle finishes on its own. */
-    ratingGraceMs: read("RATING_GRACE_MS", 30_000, "non-negative"),
     /** Word race rounds per battle (fewer when the song is too short to fit them). */
     wordRaceRounds: read("WORD_RACE_ROUNDS", 3, "non-negative-integer"),
     /** Time dancers have to type each word-race word. */
     wordRaceWindowMs: read("WORD_RACE_WINDOW_MS", 10_000, "positive"),
     /** Minimum time between two word-race round openings. */
     wordRaceMinGapMs: read("WORD_RACE_MIN_GAP_MS", 12_000, "non-negative"),
-    /** Points a dancer earns for winning a word round, added to the battle score. */
+    /** Points a spectator's vote is worth: score = VOTE_POINTS x votes + WORD_BONUS_POINTS x wordsWon. */
+    votePoints: read("VOTE_POINTS", 2, "positive-integer"),
+    /** Points a dancer earns for each word round won, added to the battle score. */
     wordBonusPoints: read("WORD_BONUS_POINTS", 1, "positive-integer"),
     /**
      * Song length assumed when the battle has no song: for the word-race timeline

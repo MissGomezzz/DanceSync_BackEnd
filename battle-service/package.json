@@ -1,7 +1,7 @@
 {
   "name": "battle-service",
   "version": "0.1.0",
-  "description": "DanceSync real-time battle service: rooms, dance battles, spectator chat and ratings over Socket.IO",
+  "description": "DanceSync real-time battle service: rooms, dance battles, spectator chat and votes over Socket.IO",
   "private": true,
   "type": "module",
   "main": "dist/server.js",

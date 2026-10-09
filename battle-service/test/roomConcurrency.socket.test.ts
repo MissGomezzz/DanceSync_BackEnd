@@ -35,51 +35,33 @@ async function battle(
 }
 
 describe("Room concurrency over Socket.IO", () => {
-  it("two back-to-back ratings from the same socket are both stored and finish the battle", async () => {
-    const { code, sockets, finished } = await battle(["host", "d2"], ["fan"]);
-    const [first, second] = await Promise.all([
-      emit<Room>(sockets.fan, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "host", score: 5 }),
-      emit<Room>(sockets.fan, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "d2", score: 3 }),
+  it("back-to-back vote changes from the same socket end on the last one", async () => {
+    const { code, sockets } = await battle(["host", "d2"], ["fan"]);
+    const acks = await Promise.all([
+      emit<{ dancerId: string | null }>(sockets.fan, "vote:cast", { roomCode: code, voterId: "fan", dancerId: "host" }),
+      emit<{ dancerId: string | null }>(sockets.fan, "vote:cast", { roomCode: code, voterId: "fan", dancerId: "d2" }),
+      emit<{ dancerId: string | null }>(sockets.fan, "vote:cast", { roomCode: code, voterId: "fan", dancerId: "host" }),
     ]);
-    assert.ok(first.ok && second.ok);
-    const stored = await harness.storedRoom(code);
-    assert.equal(stored.battle!.ratings.length, 2);
-    assert.equal(stored.status, "finished");
-    assert.deepEqual(stored.battle!.result, { scores: { host: 5, d2: 3 }, winnerId: "host" });
-    await waitUntil(() => finished.length === 1, "battle:finished");
-    await sleep(50);
-    assert.equal(finished.length, 1, "battle:finished announced more than once");
+    assert.ok(acks.every((a) => a.ok));
+    // Socket.IO runs one socket's events in order, so the last one sent is the last one stored.
+    assert.deepEqual((await harness.storedRoom(code)).battle!.votes, { fan: "host" });
   });
 
-  it("the last ratings of two spectators sent at the same time finish the battle exactly once", async () => {
-    const { code, sockets, finished } = await battle(["host", "d2"], ["fan1", "fan2"]);
-    await ok(sockets.fan1, "rating:submit", { roomCode: code, raterId: "fan1", dancerId: "host", score: 4 });
-    await ok(sockets.fan2, "rating:submit", { roomCode: code, raterId: "fan2", dancerId: "host", score: 2 });
-    await Promise.all([
-      ok(sockets.fan1, "rating:submit", { roomCode: code, raterId: "fan1", dancerId: "d2", score: 1 }),
-      ok(sockets.fan2, "rating:submit", { roomCode: code, raterId: "fan2", dancerId: "d2", score: 1 }),
-    ]);
-    const stored = await harness.storedRoom(code);
-    assert.equal(stored.battle!.ratings.length, 4);
-    assert.deepEqual(stored.battle!.result, { scores: { host: 6, d2: 2 }, winnerId: "host" });
-    await waitUntil(() => finished.length === 1, "battle:finished");
-    await sleep(50);
-    assert.equal(finished.length, 1, "battle:finished announced more than once");
-  });
-
-  it("a full room rating all at once (5 spectators x 2 dancers, bursts per socket) loses nothing", async () => {
+  it("a full room voting at once (5 spectators, bursts per socket) keeps every spectator's last vote", async () => {
     const fans = ["f1", "f2", "f3", "f4", "f5"];
     const { code, sockets, finished } = await battle(["host", "d2"], fans);
     const acks = await Promise.all(
-      fans.flatMap((fan) =>
-        ["host", "d2"].map((dancerId) => emit(sockets[fan], "rating:submit", { roomCode: code, raterId: fan, dancerId, score: 3 })),
+      fans.flatMap((fan, i) =>
+        [i % 2 === 0 ? "host" : "d2", i % 2 === 0 ? "d2" : "host"].map((dancerId) =>
+          emit(sockets[fan], "vote:cast", { roomCode: code, voterId: fan, dancerId }),
+        ),
       ),
     );
     assert.ok(acks.every((a) => a.ok));
     const stored = await harness.storedRoom(code);
-    assert.equal(stored.battle!.ratings.length, 10);
-    assert.equal(stored.status, "finished");
-    await waitUntil(() => finished.length === 1, "battle:finished");
+    assert.deepEqual(stored.battle!.votes, { f1: "d2", f2: "host", f3: "d2", f4: "host", f5: "d2" });
+    assert.equal(stored.status, "battling", "votes never finish a battle; the song end does");
+    assert.equal(finished.length, 0);
   });
 
   it("role:select followed at once by battle:start from the same socket starts with the new role", async () => {

@@ -13,7 +13,7 @@ export type RoomMutation = (room: Room) => Room | null;
 /**
  * Storage for the Room aggregate, with optimistic concurrency control.
  *
- * Several commands can target the same room at once (two spectators rating, a
+ * Several commands can target the same room at once (two spectators voting, a
  * role change racing the battle start, a timer firing while a player leaves).
  * Socket.IO even dispatches the frames of one socket through process.nextTick,
  * so two events read in the same TCP chunk run interleaved: with a plain

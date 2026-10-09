@@ -2,7 +2,8 @@ import type { Server, Socket } from "socket.io";
 import type { JoinRoom, LeaveRoomOutput } from "../../application/usecases/JoinRoom.js";
 import type { KickPlayer } from "../../application/usecases/KickPlayer.js";
 import type { ReapRooms } from "../../application/usecases/ReapRooms.js";
-import type { RateDancer } from "../../application/usecases/RateDancer.js";
+import type { CastVote } from "../../application/usecases/CastVote.js";
+import type { StartRematch } from "../../application/usecases/StartRematch.js";
 import type { SendChatMessage } from "../../application/usecases/SendChatMessage.js";
 import type { StartBattle } from "../../application/usecases/StartBattle.js";
 import type { SelectRole } from "../../application/usecases/SelectRole.js";
@@ -16,6 +17,7 @@ import type { AwardWordBonus } from "../../application/usecases/AwardWordBonus.j
 import type { SubmitWord } from "../../application/usecases/SubmitWord.js";
 import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
+import { RoomService } from "../../domain/services/RoomService.js";
 import { RoomTimers } from "../scheduling/RoomTimers.js";
 import type { WordRaceScheduler } from "../scheduling/WordRaceScheduler.js";
 import { toRoomDto, toRoomDtoOrNull } from "../serialization/roomDto.js";
@@ -38,14 +40,17 @@ export interface SocketDependencies {
   joinRoom: JoinRoom;
   startBattle: StartBattle;
   sendChatMessage: SendChatMessage;
-  rateDancer: RateDancer;
+  /** Spectators' votes (HU 20). */
+  castVote: CastVote;
+  /** The host's rematch of a finished room (HU 18). */
+  startRematch: StartRematch;
   selectRole: SelectRole;
   setReady: SetReady;
   startSongChallenge: StartSongChallenge;
   submitSongPhrase: SubmitSongPhrase;
   chooseSong: ChooseSong;
   kickPlayer: KickPlayer;
-  /** Ends a battle still running at battle.endsAt (song clip plus rating grace). */
+  /** Ends a battle still running at battle.endsAt (the end of the song clip). */
   finishBattleAtDeadline: FinishBattleAtDeadline;
   /** Lists rooms and deletes empty ones for the abandoned-room sweep. */
   reapRooms: ReapRooms;
@@ -152,7 +157,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     } else {
       roomTimers.clear(room.code, "song-choose");
     }
-    // The automatic end of the battle: song clip plus rating grace.
+    // The automatic end of the battle: the end of the song clip.
     if (room.status === "battling" && room.battle) {
       const battleId = room.battle.id;
       roomTimers.set(room.code, "battle-end", room.battle.endsAt, () => finishBattleAtDeadline(room.code, battleId));
@@ -202,9 +207,10 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   }
 
   /**
-   * Single exit for every path that finishes a battle (last rating, leave,
-   * released seat, deadline): room:updated, then battle:finished, then every
-   * battle timer stops (publishRoom clears the battle-end deadline).
+   * Single exit for every path that finishes a battle (song end, leave,
+   * released seat): room:updated, then battle:finished, then every battle timer
+   * stops (publishRoom clears the battle-end deadline). Only the atomic update
+   * that finished the battle reports it, so this runs once per battle.
    */
   async function announceBattleFinished(room: Room): Promise<void> {
     publishRoom(room);
@@ -212,12 +218,18 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     await deps.wordRace?.scheduler.stop(room.code);
   }
 
+  /** Tells a spectator (every tab, through their player channel) what their current vote is. */
+  function emitVoteMine(roomCode: string, voterId: string, dancerId: string | null): void {
+    io.to(playerChannel(voterId)).emit(ServerEvents.VOTE_MINE, { roomCode, dancerId });
+  }
+
   /**
-   * Broadcasts the outcome of a departure (explicit room:leave or a seat released
-   * after the disconnect grace period). The departure may have finished the
-   * battle, which is announced like a battle finished by the last rating.
+   * Broadcasts the outcome of a departure (room:leave or a seat released after the disconnect grace period). The departure may have
+   * finished the battle, which is announced like any other finish.
    */
-  async function announceLeave(roomCode: string, { room, battleFinished }: LeaveRoomOutput): Promise<void> {
+  async function announceLeave(roomCode: string, { room, battleFinished, discardedVoterIds }: LeaveRoomOutput): Promise<void> {
+    // Their dancer left: those spectators lost their vote and may vote again.
+    if (room) for (const voterId of discardedVoterIds) emitVoteMine(room.code, voterId, null);
     if (!room) {
       // The last player left: the room is gone, and so is every timer it had.
       forgetRoomTimers(roomCode);
@@ -323,7 +335,9 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     const seen = new Set<string>();
     for (const room of await deps.reapRooms.list()) {
       if (room.players.length === 0) {
-        if (await deps.reapRooms.deleteIfEmpty(room.code)) await announceLeave(room.code, { room: null, battleFinished: false });
+        if (await deps.reapRooms.deleteIfEmpty(room.code)) {
+          await announceLeave(room.code, { room: null, battleFinished: false, discardedVoterIds: [] });
+        }
         continue;
       }
       armRoomTimers(room);
@@ -392,6 +406,10 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         await socket.join(playerChannel(playerId));
         publishRoom(room);
         if (room.status === "battling") await resyncWordRound(socket, deps, room.code);
+        // A spectator back after a refresh gets their vote again (privately).
+        if (room.battle && room.spectators.some((s) => s.id === playerId)) {
+          socket.emit(ServerEvents.VOTE_MINE, { roomCode: room.code, dancerId: RoomService.voteOf(room, playerId) });
+        }
         return toRoomDto(room, new Date());
       }),
     );
@@ -458,7 +476,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
           const bonus = await awardWordBonus(deps.wordRace, roomCode, payload.playerId);
           io.to(roomCode).emit(
             ServerEvents.WORD_ROUND_ENDED,
-            roundEndedPayload(result.race, result.round, bonus ? deps.wordRace.awardWordBonus.points : 0),
+            roundEndedPayload(result.race, result.round, bonus?.battle?.scoring.wordBonusPoints ?? 0),
           );
           if (bonus) publishRoom(bonus);
         }
@@ -503,12 +521,32 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       }),
     );
 
-    socket.on(ClientEvents.RATING_SUBMIT, (payload, ack) =>
+    socket.on(ClientEvents.VOTE_CAST, (payload, ack) =>
       guard(socket, ack, async () => {
-        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.raterId);
-        const { room, finished } = await deps.rateDancer.execute({ ...payload, roomCode });
-        if (finished) await announceBattleFinished(room);
-        else publishRoom(room);
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.voterId);
+        const { room, dancerId, changed } = await deps.castVote.execute({
+          roomCode,
+          voterId: payload.voterId,
+          dancerId: payload.dancerId,
+        });
+        // Everyone gets the new totals; only the voter's own tabs learn the choice.
+        if (changed) publishRoom(room);
+        emitVoteMine(room.code, payload.voterId, dancerId);
+        return { dancerId };
+      }),
+    );
+
+    socket.on(ClientEvents.ROOM_REMATCH, (payload, ack) =>
+      guard(socket, ack, async () => {
+        const roomCode = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
+        const { room, clearedVoterIds } = await deps.startRematch.execute({
+          roomCode,
+          requesterId: payload.requesterId,
+        });
+        // Back in the lobby: no word race, and publishRoom clears every battle deadline.
+        await deps.wordRace?.scheduler.stop(room.code);
+        publishRoom(room);
+        for (const voterId of clearedVoterIds) emitVoteMine(room.code, voterId, null);
         return toRoomDto(room, new Date());
       }),
     );
@@ -612,7 +650,7 @@ function playerChannel(playerId: string): string {
 /**
  * Ensures the socket joined `roomCode` as `playerId` (the identity bound by
  * room:join), so a client can neither act in a room it is not in nor
- * impersonate another player: kick them, start as the host, chat or rate as
+ * impersonate another player: kick them, start as the host, chat or vote as
  * them. Room codes are case-insensitive, like the repository lookup. Returns
  * the canonical code of the joined room.
  */

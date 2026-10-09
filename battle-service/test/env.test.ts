@@ -10,11 +10,19 @@ describe("Configuration", () => {
     const env = loadEnv({});
     assert.equal(env.battleStartCountdownMs, 5_000);
     assert.equal(env.wordBonusPoints, 1);
+    assert.equal(env.votePoints, 2);
     assert.equal(env.disconnectGraceMs, 15_000);
+    assert.equal("ratingGraceMs" in env, false, "the rating grace period is gone");
   });
 
   it("accepts valid overrides", () => {
-    const env = loadEnv({ BATTLE_START_COUNTDOWN_MS: "0", WORD_BONUS_POINTS: "3", DISCONNECT_GRACE_MS: " 2500 " });
+    const env = loadEnv({
+      BATTLE_START_COUNTDOWN_MS: "0",
+      WORD_BONUS_POINTS: "3",
+      VOTE_POINTS: "5",
+      DISCONNECT_GRACE_MS: " 2500 ",
+    });
+    assert.equal(env.votePoints, 5);
     assert.equal(env.battleStartCountdownMs, 0);
     assert.equal(env.wordBonusPoints, 3);
     assert.equal(env.disconnectGraceMs, 2_500);
@@ -28,6 +36,10 @@ describe("Configuration", () => {
       { SONG_CHALLENGE_MS: "0" },
       { WORD_BONUS_POINTS: "0" },
       { WORD_BONUS_POINTS: "1.5" },
+      { VOTE_POINTS: "0" },
+      { VOTE_POINTS: "-2" },
+      { VOTE_POINTS: "2.5" },
+      { VOTE_POINTS: "two" },
       { WORD_RACE_ROUNDS: "2.5" },
       { WORD_RACE_WINDOW_MS: "Infinity" },
       { PORT: "http" },

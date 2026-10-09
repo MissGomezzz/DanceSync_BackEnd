@@ -18,11 +18,15 @@ export interface LeaveRoomOutput {
   /** The updated room, or null when the last player left and the room was removed. */
   room: Room | null;
   /**
-   * True when this departure finished the running battle: too few dancers are left
-   * (result null) or every remaining spectator had already rated every remaining
-   * dancer (result available). The caller must announce it and stop the word race.
+   * True when this departure finished the running battle (too few dancers are
+   * left). The caller must announce it and stop the word race.
    */
   battleFinished: boolean;
+  /**
+   * Spectators still in the room whose vote was discarded because the dancer
+   * they voted for left; they can vote again and must be told (vote:mine).
+   */
+  discardedVoterIds: string[];
 }
 
 export class JoinRoom {
@@ -43,6 +47,7 @@ export class JoinRoom {
 
   async leave(input: LeaveRoomInput): Promise<LeaveRoomOutput> {
     let battleFinished = false;
+    let discardedVoterIds: string[] = [];
     // Removing the last player deletes the room in the same atomic step, so a
     // player joining at that moment either gets in first (and keeps the room
     // alive) or finds it gone, never a seat in a room deleted right after.
@@ -50,8 +55,12 @@ export class JoinRoom {
     const room = await this.rooms.update(input.roomCode, (current) => {
       const updated = RoomService.leave(current, input.playerId, now);
       battleFinished = current.status === "battling" && updated.status === "finished";
+      const votesLeft = updated.battle?.votes ?? {};
+      discardedVoterIds = Object.keys(current.battle?.votes ?? {}).filter(
+        (voterId) => voterId !== input.playerId && !(voterId in votesLeft),
+      );
       return updated.players.length === 0 ? null : updated;
     });
-    return { room, battleFinished };
+    return { room, battleFinished, discardedVoterIds };
   }
 }

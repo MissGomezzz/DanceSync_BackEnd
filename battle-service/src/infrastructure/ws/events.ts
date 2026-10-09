@@ -9,7 +9,8 @@ export const ClientEvents = {
   ROOM_LEAVE: "room:leave",
   BATTLE_START: "battle:start",
   CHAT_MESSAGE: "chat:message",
-  RATING_SUBMIT: "rating:submit",
+  VOTE_CAST: "vote:cast",
+  ROOM_REMATCH: "room:rematch",
   WEBRTC_READY: "webrtc:ready",
   WEBRTC_SIGNAL: "webrtc:signal",
   ROLE_SELECT: "role:select",
@@ -32,6 +33,7 @@ export const ServerEvents = {
   WORD_ROUND_STARTED: "word:round-started",
   WORD_ROUND_ENDED: "word:round-ended",
   ROOM_KICKED: "room:kicked",
+  VOTE_MINE: "vote:mine",
   ERROR: "error:domain",
 } as const;
 
@@ -107,11 +109,32 @@ export interface ChatMessagePayload {
   content: string;
 }
 
-export interface RatingSubmitPayload {
+/** A spectator casts or moves their vote (dancerId) or withdraws it (null). */
+export interface VoteCastPayload {
   roomCode: string;
-  raterId: string;
-  dancerId: string;
-  score: number;
+  voterId: string;
+  dancerId: string | null;
+}
+
+/** Ack of vote:cast: the voter's current vote. New totals arrive through room:updated. */
+export interface VoteCastResult {
+  dancerId: string | null;
+}
+
+/**
+ * The receiving spectator's own current vote. Sent only to their player channel,
+ * after each change (including a vote discarded because its dancer left, or
+ * cleared by a rematch) and when they (re)join a room with a battle.
+ */
+export interface VoteMinePayload {
+  roomCode: string;
+  dancerId: string | null;
+}
+
+/** The host takes a finished room back to the lobby. */
+export interface RoomRematchPayload {
+  roomCode: string;
+  requesterId: string;
 }
 
 /**
@@ -185,7 +208,7 @@ export interface WordRoundEndedPayload {
   reason: "won" | "expired";
   /** Rounds won so far per dancer. */
   wins: Record<string, number>;
-  /** Bonus points the winner earned for this round; 0 when nobody won it. */
+  /** Points the winner earned for this round (WORD_BONUS_POINTS); 0 when nobody won it. */
   bonusPoints: number;
 }
 
@@ -202,7 +225,8 @@ export interface ClientToServerEvents {
   [ClientEvents.ROOM_LEAVE]: (payload: RoomLeavePayload, ack?: Ack<RoomDto | null>) => void;
   [ClientEvents.BATTLE_START]: (payload: BattleStartPayload, ack?: Ack<RoomDto>) => void;
   [ClientEvents.CHAT_MESSAGE]: (payload: ChatMessagePayload, ack?: Ack<ChatMessage>) => void;
-  [ClientEvents.RATING_SUBMIT]: (payload: RatingSubmitPayload, ack?: Ack<RoomDto>) => void;
+  [ClientEvents.VOTE_CAST]: (payload: VoteCastPayload, ack?: Ack<VoteCastResult>) => void;
+  [ClientEvents.ROOM_REMATCH]: (payload: RoomRematchPayload, ack?: Ack<RoomDto>) => void;
   [ClientEvents.WEBRTC_READY]: (payload: WebRtcReadyPayload, ack?: Ack<null>) => void;
   [ClientEvents.WEBRTC_SIGNAL]: (payload: WebRtcSignalPayload, ack?: Ack<null>) => void;
   [ClientEvents.ROLE_SELECT]: (payload: RoleSelectPayload, ack?: Ack<RoomDto>) => void;
@@ -227,6 +251,7 @@ export interface ServerToClientEvents {
   [ServerEvents.WORD_ROUND_STARTED]: (payload: WordRoundStartedPayload) => void;
   [ServerEvents.WORD_ROUND_ENDED]: (payload: WordRoundEndedPayload) => void;
   [ServerEvents.ROOM_KICKED]: (payload: RoomKickedPayload) => void;
+  [ServerEvents.VOTE_MINE]: (payload: VoteMinePayload) => void;
   [ServerEvents.ERROR]: (error: DomainErrorPayload) => void;
 }
 

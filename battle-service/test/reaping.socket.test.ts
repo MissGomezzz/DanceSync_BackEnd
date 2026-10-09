@@ -90,7 +90,7 @@ describe("Reaping abandoned rooms", () => {
     await harness.handlers().sweep();
 
     await waitUntil(() => finished.length === 1, "battle:finished after the release");
-    assert.equal(finished[0].battle!.result, null);
+    assert.equal(finished[0].battle!.endReason, "not-enough-dancers");
     assert.equal(harness.roomTimers().has(code, "battle-end"), false, "the battle deadline timer leaked");
   });
 });

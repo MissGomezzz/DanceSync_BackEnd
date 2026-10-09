@@ -14,7 +14,8 @@ import { ExpireWordRound } from "../src/application/usecases/ExpireWordRound.js"
 import { GetActiveWordRound } from "../src/application/usecases/GetActiveWordRound.js";
 import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
 import { OpenWordRound } from "../src/application/usecases/OpenWordRound.js";
-import { RateDancer } from "../src/application/usecases/RateDancer.js";
+import { CastVote } from "../src/application/usecases/CastVote.js";
+import { StartRematch } from "../src/application/usecases/StartRematch.js";
 import { SelectRole } from "../src/application/usecases/SelectRole.js";
 import { SetReady } from "../src/application/usecases/SetReady.js";
 import { SendChatMessage } from "../src/application/usecases/SendChatMessage.js";
@@ -24,11 +25,11 @@ import { StartWordRace } from "../src/application/usecases/StartWordRace.js";
 import { StopWordRace } from "../src/application/usecases/StopWordRace.js";
 import { SubmitSongPhrase } from "../src/application/usecases/SubmitSongPhrase.js";
 import { SubmitWord } from "../src/application/usecases/SubmitWord.js";
-import type { Room } from "../src/domain/model/Room.js";
+import type { RoomDto as Room } from "../src/infrastructure/serialization/roomDto.js";
 import { InMemoryRoomRepository } from "../src/infrastructure/persistence/InMemoryRoomRepository.js";
 import { InMemoryWordRaceRepository } from "../src/infrastructure/persistence/InMemoryWordRaceRepository.js";
 import { WordRaceScheduler } from "../src/infrastructure/scheduling/WordRaceScheduler.js";
-import type { WordRoundStartedPayload } from "../src/infrastructure/ws/events.js";
+import type { VoteMinePayload, WordRoundStartedPayload } from "../src/infrastructure/ws/events.js";
 import { registerSocketHandlers, type BattleServer, type SocketHandlersHandle } from "../src/infrastructure/ws/socketHandlers.js";
 import { createSocketWordRaceBroadcaster } from "../src/infrastructure/ws/wordRaceMessages.js";
 import { pickSong, readyUp } from "./support/ready.js";
@@ -60,6 +61,7 @@ interface Recorded {
   socket: ClientSocket;
   finished: Room[];
   started: WordRoundStartedPayload[];
+  votes: VoteMinePayload[];
 }
 
 function emit<T>(socket: ClientSocket, event: string, payload: unknown): Promise<AckResponse<T>> {
@@ -83,7 +85,8 @@ async function waitUntil(condition: () => boolean, label: string, timeoutMs = 30
 async function client(): Promise<Recorded> {
   const socket = connect(url, { path: "/socket.io", transports: ["websocket"], forceNew: true });
   clients.push(socket);
-  const recorded: Recorded = { socket, finished: [], started: [] };
+  const recorded: Recorded = { socket, finished: [], started: [], votes: [] };
+  socket.on("vote:mine", (payload: VoteMinePayload) => recorded.votes.push(payload));
   socket.on("battle:finished", (room: Room) => recorded.finished.push(room));
   socket.on("word:round-started", (payload: WordRoundStartedPayload) => recorded.started.push(payload));
   await new Promise<void>((resolve) => socket.on("connect", () => resolve()));
@@ -129,7 +132,8 @@ before(async () => {
     selectRole: new SelectRole(rooms),
     setReady: new SetReady(rooms),
     sendChatMessage: new SendChatMessage(rooms),
-    rateDancer: new RateDancer(rooms),
+    castVote: new CastVote(rooms),
+    startRematch: new StartRematch(rooms),
     startSongChallenge: new StartSongChallenge(rooms),
     submitSongPhrase: new SubmitSongPhrase(rooms),
     chooseSong: new ChooseSong(rooms),
@@ -154,11 +158,15 @@ describe("Leaving during a battle over Socket.IO", () => {
   it("a dancer leaving with two dancers left keeps the battle and the word race going", async () => {
     const { code, sockets } = await battle(["host", "d2", "d3"]);
     const { host, d2, d3, fan } = sockets;
+    await ok(fan.socket, "vote:cast", { roomCode: code, voterId: "fan", dancerId: "d3" });
 
     const room = await ok<Room>(d3.socket, "room:leave", { roomCode: code, playerId: "d3" });
     assert.equal(room.status, "battling");
     assert.deepEqual(room.battle!.dancerIds, ["host", "d2"]);
     assert.ok(scheduler.pendingTimers(code) > 0, "the word race was stopped");
+    // The vote for the dancer who left is discarded, and its spectator is told so.
+    assert.deepEqual(room.battle!.voteCounts, { host: 0, d2: 0 });
+    await waitUntil(() => fan.votes.at(-1)?.dancerId === null && fan.votes.length === 2, "vote:mine null for the fan");
 
     // The word race keeps running for the remaining dancers.
     await waitUntil(() => host.started.length >= 1, "round 1 after the departure");
@@ -171,12 +179,16 @@ describe("Leaving during a battle over Socket.IO", () => {
     });
     assert.equal(win.outcome, "won");
 
-    // Rating the remaining dancers finishes it with a result over them only;
-    // d2's 5 stars plus the word bonus for the round they won.
-    await ok(fan.socket, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "host", score: 2 });
-    await ok(fan.socket, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "d2", score: 5 });
+    // The fan votes again, for d2; then the host leaves too and the battle ends
+    // with a result over the dancer who stayed: 1 vote (2 points) + 1 word (1 point).
+    await ok(fan.socket, "vote:cast", { roomCode: code, voterId: "fan", dancerId: "d2" });
+    await ok(host.socket, "room:leave", { roomCode: code, playerId: "host" });
     await waitUntil(() => fan.finished.length === 1, "battle:finished");
-    assert.deepEqual(fan.finished[0].battle!.result, { scores: { host: 2, d2: 6 }, winnerId: "d2" });
+    assert.equal(fan.finished[0].battle!.endReason, "not-enough-dancers");
+    assert.deepEqual(fan.finished[0].battle!.result, {
+      standings: [{ dancerId: "d2", displayName: "d2", votes: 1, wordsWon: 1, score: 3, rank: 1 }],
+      winnerId: "d2",
+    });
     assert.equal(scheduler.pendingTimers(code), 0);
   });
 
@@ -186,11 +198,13 @@ describe("Leaving during a battle over Socket.IO", () => {
 
     const room = await ok<Room>(d2.socket, "room:leave", { roomCode: code, playerId: "d2" });
     assert.equal(room.status, "finished");
-    assert.equal(room.battle!.result, null);
+    assert.equal(room.battle!.endReason, "not-enough-dancers");
 
     await waitUntil(() => host.finished.length === 1 && fan.finished.length === 1, "battle:finished on every socket");
     assert.equal(fan.finished[0].status, "finished");
-    assert.equal(fan.finished[0].battle!.result, null);
+    // The dancer who stayed is the only one ranked.
+    assert.deepEqual(fan.finished[0].battle!.result!.standings.map((s) => s.dancerId), ["host"]);
+    assert.deepEqual(fan.finished[0].lastResult, fan.finished[0].battle!.result);
     assert.equal(d2.finished.length, 0, "the player who left is no longer in the room channel");
     assert.equal(scheduler.pendingTimers(code), 0);
 
@@ -207,21 +221,26 @@ describe("Leaving during a battle over Socket.IO", () => {
 
     d2.socket.disconnect();
     await waitUntil(() => fan.finished.length === 1, "battle:finished after the disconnect grace period");
-    assert.equal(fan.finished[0].battle!.result, null);
+    assert.equal(fan.finished[0].battle!.endReason, "not-enough-dancers");
     assert.equal(scheduler.pendingTimers(code), 0);
   });
 
-  it("a spectator who still owed ratings leaving finishes the battle with a result", async () => {
+  it("a spectator leaving loses their vote and the battle goes on", async () => {
     const { code, sockets } = await battle(["host", "d2"], ["fan", "fan2"]);
     const { host, fan, fan2 } = sockets;
-    await ok(fan.socket, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "host", score: 3 });
-    await ok(fan.socket, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "d2", score: 1 });
-    assert.equal(host.finished.length, 0);
+    await ok(fan.socket, "vote:cast", { roomCode: code, voterId: "fan", dancerId: "host" });
+    await ok(fan2.socket, "vote:cast", { roomCode: code, voterId: "fan2", dancerId: "host" });
 
     const room = await ok<Room>(fan2.socket, "room:leave", { roomCode: code, playerId: "fan2" });
-    assert.equal(room.status, "finished");
-    await waitUntil(() => host.finished.length === 1, "battle:finished");
-    assert.deepEqual(host.finished[0].battle!.result, { scores: { host: 3, d2: 1 }, winnerId: "host" });
+    assert.equal(room.status, "battling");
+    assert.deepEqual(room.battle!.voteCounts, { host: 1, d2: 0 });
+    assert.equal(room.battle!.standings[0].score, 2);
+    assert.deepEqual((await rooms.findByCode(code))!.battle!.votes, { fan: "host" });
+    assert.equal(host.finished.length, 0);
+    assert.ok(scheduler.pendingTimers(code) > 0, "the word race was stopped");
+
+    // Close the battle so no word race timer outlives the test.
+    await ok(host.socket, "room:leave", { roomCode: code, playerId: "host" });
     assert.equal(scheduler.pendingTimers(code), 0);
   });
 });

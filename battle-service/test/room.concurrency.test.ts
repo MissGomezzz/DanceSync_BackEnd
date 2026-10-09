@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { setTimeout as sleep } from "node:timers/promises";
 import { describe, it } from "node:test";
-import { RateDancer } from "../src/application/usecases/RateDancer.js";
+import { CastVote } from "../src/application/usecases/CastVote.js";
 import { SubmitSongPhrase } from "../src/application/usecases/SubmitSongPhrase.js";
 import { DomainError } from "../src/domain/errors/DomainError.js";
 import type { Player } from "../src/domain/model/Player.js";
 import type { Room } from "../src/domain/model/Room.js";
 import type { RoomMutation, RoomRepository } from "../src/domain/ports/RoomRepository.js";
 import { RoomService } from "../src/domain/services/RoomService.js";
+import { ScoringService } from "../src/domain/services/ScoringService.js";
 import { SongSelectionService } from "../src/domain/services/SongSelectionService.js";
 import { InMemoryRoomRepository } from "../src/infrastructure/persistence/InMemoryRoomRepository.js";
 import { SONG_CATALOG } from "../src/domain/catalog/songs.js";
@@ -138,9 +139,27 @@ function ids(prefix: string, count: number): string[] {
   return Array.from({ length: count }, (_, i) => `${prefix}-${i}`);
 }
 
-/** Every (spectator, dancer) pair, i.e. every rating needed to finish the battle. */
-function allRatings(spectators: string[], dancers: string[]): { raterId: string; dancerId: string; score: number }[] {
-  return spectators.flatMap((raterId, i) => dancers.map((dancerId, j) => ({ raterId, dancerId, score: ((i + j) % 5) + 1 })));
+/**
+ * Each spectator's sequence of votes: cast, move (sometimes twice), sometimes
+ * withdraw at the end. Deterministic per spectator, varied across spectators.
+ */
+function voteSequence(index: number, dancers: string[]): (string | null)[] {
+  const first = dancers[index % dancers.length];
+  const second = dancers[(index + 1) % dancers.length];
+  const sequence: (string | null)[] = [first, second];
+  if (index % 3 === 0) sequence.push(dancers[(index + 2) % dancers.length]);
+  if (index % 5 === 0) sequence.push(null);
+  return sequence;
+}
+
+/** Final votes per dancer if every spectator's last choice is the one kept. */
+function expectedCounts(sequences: (string | null)[][], dancers: string[]): Record<string, number> {
+  const counts: Record<string, number> = Object.fromEntries(dancers.map((d) => [d, 0]));
+  for (const sequence of sequences) {
+    const last = sequence[sequence.length - 1];
+    if (last !== null) counts[last] += 1;
+  }
+  return counts;
 }
 
 async function seed<T extends RoomRepository>(repository: T, room: Room): Promise<T> {
@@ -148,55 +167,69 @@ async function seed<T extends RoomRepository>(repository: T, room: Room): Promis
   return repository;
 }
 
-describe("Room concurrency: simultaneous ratings are never lost", () => {
-  const dancers = ids("dancer", 2);
+describe("Room concurrency: simultaneous votes are never lost (HU 17, HU 20)", () => {
+  const dancers = ids("dancer", 3);
   const spectators = ids("fan", 50);
-  const ratings = allRatings(spectators, dancers);
+  const sequences = spectators.map((_, i) => voteSequence(i, dancers));
+  const expected = expectedCounts(sequences, dancers);
 
-  async function rateAll(repository: RoomRepository): Promise<{ finished: number; stored: Room }> {
-    const rateDancer = new RateDancer(repository);
-    const results = await Promise.all(ratings.map((r) => rateDancer.execute({ roomCode: CODE, ...r })));
-    const stored = (await repository.findByCode(CODE))!;
-    return { finished: results.filter((r) => r.finished).length, stored };
+  /** Every spectator votes and changes their vote at the same time as the others (each in order). */
+  async function voteAll(repository: RoomRepository): Promise<Room> {
+    const castVote = new CastVote(repository);
+    await Promise.all(
+      spectators.map(async (voterId, i) => {
+        for (const dancerId of sequences[i]) {
+          const { dancerId: stored } = await castVote.execute({ roomCode: CODE, voterId, dancerId });
+          assert.equal(stored, dancerId, "the ack must report the vote just cast");
+        }
+      }),
+    );
+    return (await repository.findByCode(CODE))!;
   }
 
-  it(`${ratings.length} simultaneous ratings are all stored and finish the battle once (${ITERATIONS} iterations)`, async () => {
+  function assertFinalCounts(stored: Room, label: string): void {
+    assert.deepEqual(ScoringService.voteCounts(stored.battle!), expected, `${label}: votes lost or duplicated`);
+    for (const [i, voterId] of spectators.entries()) {
+      const last = sequences[i][sequences[i].length - 1];
+      assert.equal(stored.battle!.votes[voterId] ?? null, last, `${label}: ${voterId} does not hold their last choice`);
+    }
+    // The live ranking agrees with the counts (2 points per vote by default).
+    for (const standing of ScoringService.standings(stored.battle!)) {
+      assert.equal(standing.score, 2 * expected[standing.dancerId]);
+    }
+  }
+
+  it(`${spectators.length} spectators voting and changing votes concurrently keep exactly their last choice (${ITERATIONS} iterations)`, async () => {
+    const writes = sequences.reduce((total, sequence) => total + sequence.length, 0);
     for (let iteration = 0; iteration < ITERATIONS; iteration++) {
       const battle = RoomService.startBattle(crowdedRoom(dancers, spectators));
       const repository = await seed(new LatencyRoomRepository(new InMemoryRoomRepository()), battle);
-      const { finished, stored } = await rateAll(repository);
-      assert.equal(stored.battle!.ratings.length, ratings.length, `iteration ${iteration}: ratings lost`);
-      assert.equal(stored.status, "finished");
-      assert.equal(finished, 1, `iteration ${iteration}: ${finished} ratings reported finishing the battle`);
-      assert.equal(stored.version, ratings.length, "one version per stored change");
+      const stored = await voteAll(repository);
+      assertFinalCounts(stored, `iteration ${iteration}`);
+      assert.equal(stored.version, writes, "one version per stored vote change");
     }
   });
 
   it("the same holds on a store with real version conflicts (compare-and-set and retry)", async () => {
-    const few = ids("fan", 10);
-    const wanted = allRatings(few, dancers);
-    const repository = await seed(new RemoteRoomStore(wanted.length + 5), RoomService.startBattle(crowdedRoom(dancers, few)));
-    const rateDancer = new RateDancer(repository);
-    const results = await Promise.all(wanted.map((r) => rateDancer.execute({ roomCode: CODE, ...r })));
-    const stored = (await repository.findByCode(CODE))!;
-    console.log(`remote store: ${wanted.length} concurrent ratings, ${repository.conflicts} version conflicts retried`);
+    const repository = await seed(new RemoteRoomStore(spectators.length * 4), RoomService.startBattle(crowdedRoom(dancers, spectators)));
+    const stored = await voteAll(repository);
+    console.log(`remote store: ${spectators.length} spectators voting, ${repository.conflicts} version conflicts retried`);
     assert.ok(repository.conflicts > 0, "no conflict happened, the test proves nothing");
-    assert.equal(stored.battle!.ratings.length, wanted.length);
-    assert.equal(stored.status, "finished");
-    assert.equal(results.filter((r) => r.finished).length, 1);
+    assertFinalCounts(stored, "remote store");
   });
 
-  it("negative control: read -> rate -> blind save DOES lose ratings", async () => {
+  it("negative control: read -> vote -> blind save DOES lose votes", async () => {
     const repository = await seed(new RemoteRoomStore(1), RoomService.startBattle(crowdedRoom(dancers, spectators)));
     await Promise.all(
-      ratings.map(async (r) => {
+      spectators.map(async (voterId) => {
         const room = (await repository.findByCode(CODE))!;
-        await repository.blindSave(RoomService.rate(room, r));
+        await repository.blindSave(RoomService.castVote(room, voterId, dancers[0]));
       }),
     );
     const stored = (await repository.findByCode(CODE))!;
-    console.log(`naive read-then-save: ${stored.battle!.ratings.length}/${ratings.length} ratings survived`);
-    assert.ok(stored.battle!.ratings.length < ratings.length, "the naive version lost nothing");
+    const kept = Object.keys(stored.battle!.votes).length;
+    console.log(`naive read-then-save: ${kept}/${spectators.length} votes survived`);
+    assert.ok(kept < spectators.length, "the naive version lost nothing");
   });
 });
 

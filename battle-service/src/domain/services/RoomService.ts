@@ -1,11 +1,17 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { DomainError } from "../errors/DomainError.js";
-import { DEFAULT_RATING_GRACE_MS, type Battle, type BattleResult } from "../model/Battle.js";
+import {
+  DEFAULT_VOTE_POINTS,
+  DEFAULT_WORD_BONUS_POINTS,
+  type Battle,
+  type BattleEndReason,
+  type ScoringPoints,
+} from "../model/Battle.js";
 import { MAX_DISPLAY_NAME_LENGTH, MAX_PLAYER_ID_LENGTH, type Player, type PlayerRole } from "../model/Player.js";
-import { MAX_SCORE, MIN_SCORE, type Rating } from "../model/Rating.js";
 import { MAX_PLAYERS, MIN_DANCERS_PER_BATTLE, type Room } from "../model/Room.js";
 import { DEFAULT_WORD_FALLBACK_DURATION_MS } from "../model/WordRace.js";
 import { requireEveryoneReady } from "./readiness.js";
+import { ScoringService } from "./ScoringService.js";
 import { isSelectionInProgress, secureRandomIndex, SongSelectionService } from "./SongSelectionService.js";
 
 const ROOM_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -23,11 +29,16 @@ export interface StartBattleOptions {
   now?: Date;
   /** Delay between the start command and battle.startedAt, in ms (0 or more). */
   countdownMs?: number;
-  /** Time spectators keep to rate once the song ends, in ms (0 or more). */
-  ratingGraceMs?: number;
   /** Song length assumed when the battle has no song, in ms. */
   fallbackDurationMs?: number;
+  /** Points per vote and per word won; snapshotted into the battle. */
+  scoring?: ScoringPoints;
 }
+
+export const DEFAULT_SCORING: ScoringPoints = {
+  votePoints: DEFAULT_VOTE_POINTS,
+  wordBonusPoints: DEFAULT_WORD_BONUS_POINTS,
+};
 
 export function generateRoomCode(): string {
   const bytes = randomBytes(ROOM_CODE_LENGTH);
@@ -59,6 +70,23 @@ export function validatePlayer(id: unknown, displayName: unknown): Omit<Player, 
   return { id, displayName: name };
 }
 
+/**
+ * Makes a display name unique within the room (HU 19): a name already used by
+ * another player, ignoring case, gets the first free suffix " 2", " 3", ...
+ * The base is shortened when needed so the result still fits
+ * MAX_DISPLAY_NAME_LENGTH.
+ */
+export function uniqueDisplayName(players: readonly Pick<Player, "displayName">[], displayName: string): string {
+  const taken = new Set(players.map((p) => p.displayName.toLocaleLowerCase()));
+  if (!taken.has(displayName.toLocaleLowerCase())) return displayName;
+  for (let n = 2; ; n++) {
+    const suffix = ` ${n}`;
+    const base = displayName.slice(0, MAX_DISPLAY_NAME_LENGTH - suffix.length).trimEnd();
+    const candidate = `${base}${suffix}`;
+    if (!taken.has(candidate.toLocaleLowerCase())) return candidate;
+  }
+}
+
 /** A room code sent by a client; anything that is not non-empty text cannot name a room. */
 export function requireRoomCode(code: unknown): string {
   if (typeof code !== "string" || code.trim().length === 0) {
@@ -82,6 +110,7 @@ export const RoomService = {
       battle: null,
       songSelection: null,
       selectedSong: null,
+      lastResult: null,
       createdAt: new Date(),
       version: 0,
     };
@@ -97,7 +126,13 @@ export const RoomService = {
     if (room.players.length >= MAX_PLAYERS) {
       throw new DomainError("ROOM_FULL", `Room ${room.code} already has ${MAX_PLAYERS} players`);
     }
-    const joined: Player = { ...validatePlayer(player.id, player.displayName), role: "undecided", ready: false };
+    const valid = validatePlayer(player.id, player.displayName);
+    const joined: Player = {
+      ...valid,
+      displayName: uniqueDisplayName(room.players, valid.displayName),
+      role: "undecided",
+      ready: false,
+    };
     return { ...room, players: [...room.players, joined] };
   },
 
@@ -146,12 +181,12 @@ export const RoomService = {
   },
 
   /**
-   * Removes a player. During a battle the departure can also settle it:
-   * - a dancer leaving is withdrawn from the battle; with at least
-   *   MIN_DANCERS_PER_BATTLE dancers left the battle goes on, otherwise it ends
-   *   early with `result: null`;
-   * - a dancer or a spectator leaving can leave every remaining spectator having
-   *   rated every remaining dancer, which finishes the battle with a result.
+   * Removes a player. During a battle the departure also settles it:
+   * - a spectator leaving loses their vote;
+   * - a dancer leaving is withdrawn from the battle and the votes for them are
+   *   discarded (those spectators can vote again); with fewer than
+   *   MIN_DANCERS_PER_BATTLE dancers left the battle ends early
+   *   ("not-enough-dancers") with a result over the dancers who stayed.
    * Callers detect the end by comparing the status before and after.
    */
   leave(room: Room, playerId: string, now: Date = new Date()): Room {
@@ -166,7 +201,12 @@ export const RoomService = {
       spectators: room.spectators.filter((p) => p.id !== playerId),
       hostId: room.hostId === playerId ? (players[0]?.id ?? room.hostId) : room.hostId,
     };
-    return SongSelectionService.handlePlayerLeft(settleBattleAfterLeave(updated, playerId), playerId, secureRandomIndex, now);
+    return SongSelectionService.handlePlayerLeft(
+      settleBattleAfterLeave(updated, playerId, now),
+      playerId,
+      secureRandomIndex,
+      now,
+    );
   },
 
   /**
@@ -202,15 +242,19 @@ export const RoomService = {
     const {
       now = new Date(),
       countdownMs = DEFAULT_START_COUNTDOWN_MS,
-      ratingGraceMs = DEFAULT_RATING_GRACE_MS,
       fallbackDurationMs = DEFAULT_WORD_FALLBACK_DURATION_MS,
+      scoring = DEFAULT_SCORING,
     } = options;
     for (const [name, value] of [
       ["start countdown", countdownMs],
-      ["rating grace", ratingGraceMs],
       ["fallback song length", fallbackDurationMs],
     ] as const) {
       if (!Number.isFinite(value) || value < 0) throw new RangeError(`The ${name} must be 0 ms or more, received ${value}`);
+    }
+    for (const [name, value] of Object.entries(scoring)) {
+      if (!Number.isInteger(value) || value < 0) {
+        throw new RangeError(`${name} must be a whole number of 0 or more, received ${value}`);
+      }
     }
     if (room.status !== "waiting") {
       throw new DomainError("ROOM_NOT_WAITING", `Room ${room.code} already started`);
@@ -247,6 +291,7 @@ export const RoomService = {
       const isDancer = dancers.some((d) => d.id === p.id);
       return isDancer ? { ...p, role: "dancer" as const } : { ...p, role: "spectator" as const };
     });
+    const spectators = players.filter((p) => p.role === "spectator");
     const startedAt = now.getTime() + countdownMs;
     const songMs = room.selectedSong ? room.selectedSong.durationSeconds * 1000 : fallbackDurationMs;
     const battle: Battle = {
@@ -254,155 +299,165 @@ export const RoomService = {
       roomCode: room.code,
       dancerIds: dancers.map((d) => d.id),
       roster: dancers.map((d) => ({ id: d.id, displayName: d.displayName })),
+      audience: spectators.map((s) => ({ id: s.id, displayName: s.displayName })),
       song: room.selectedSong,
-      ratings: [],
-      bonusPoints: Object.fromEntries(dancers.map((d) => [d.id, 0])),
+      votes: {},
+      wordsWon: Object.fromEntries(dancers.map((d) => [d.id, 0])),
+      scoring: { votePoints: scoring.votePoints, wordBonusPoints: scoring.wordBonusPoints },
       startedAt: new Date(startedAt),
-      endsAt: new Date(startedAt + songMs + ratingGraceMs),
+      // The battle lasts exactly the song clip; votes count until then.
+      endsAt: new Date(startedAt + songMs),
       finishedAt: null,
+      endReason: null,
       result: null,
     };
     return {
       ...room,
       players,
       dancers,
-      spectators: players.filter((p) => p.role === "spectator"),
+      spectators,
       status: "battling",
       battle,
     };
   },
 
   /**
-   * Adds the bonus for a word round won by `playerId`. Only a dancer of the
-   * battle in progress earns it; a bonus for a dancer who already left, or after
-   * the battle finished, is refused so it can never change a closed result.
+   * Counts a word round won by `playerId`. Only a dancer of the battle in
+   * progress earns it; a win for a dancer who already left, or after the battle
+   * finished, is refused so it can never change a closed result.
    */
-  awardWordBonus(room: Room, playerId: string, points: number): Room {
+  awardWordBonus(room: Room, playerId: string): Room {
     if (room.status !== "battling" || !room.battle) {
       throw new DomainError("ROOM_NOT_BATTLING", `Room ${room.code} has no battle in progress`);
     }
     if (!room.battle.dancerIds.includes(playerId)) {
       throw new DomainError("INVALID_DANCER", `Player ${playerId} is not dancing in this battle`);
     }
-    if (!Number.isInteger(points) || points <= 0) {
-      throw new DomainError("INVALID_SCORE", "The bonus must be a positive whole number of points");
-    }
-    const current = room.battle.bonusPoints[playerId] ?? 0;
+    const current = room.battle.wordsWon[playerId] ?? 0;
     return {
       ...room,
-      battle: { ...room.battle, bonusPoints: { ...room.battle.bonusPoints, [playerId]: current + points } },
+      battle: { ...room.battle, wordsWon: { ...room.battle.wordsWon, [playerId]: current + 1 } },
     };
   },
 
   /**
-   * Records a spectator's rating. Ratings are only accepted once the dancing has
-   * begun (battle.startedAt, after the start countdown): before that nobody has
-   * danced yet, so a rating would be meaningless.
+   * A spectator votes for their favourite dancer (HU 20): `dancerId` casts or
+   * moves the vote, null withdraws it. One vote per spectator, accepted from
+   * the moment the dancing begins (battle.startedAt) until the song ends
+   * (battle.endsAt). The decision is taken on the state being stored, so a vote
+   * racing the end of the song either counts (before endsAt) or is refused.
+   * Casting the vote a spectator already has, or withdrawing none, returns the
+   * very same room (nothing to store).
    */
-  rate(room: Room, rating: Omit<Rating, "submittedAt">, now: Date = new Date()): Room {
-    if (room.status !== "battling" || !room.battle || !room.dancers) {
+  castVote(room: Room, voterId: string, dancerId: string | null, now: Date = new Date()): Room {
+    const battle = room.battle;
+    if (room.status === "finished" && battle) {
+      throw new DomainError("BATTLE_FINISHED", "The battle is over; votes are closed");
+    }
+    if (room.status !== "battling" || !battle) {
       throw new DomainError("ROOM_NOT_BATTLING", `Room ${room.code} has no battle in progress`);
     }
-    if (now.getTime() < room.battle.startedAt.getTime()) {
-      throw new DomainError("BATTLE_NOT_STARTED", "The battle has not started yet; rate once the dancing begins");
+    if (!room.spectators.some((s) => s.id === voterId)) {
+      throw new DomainError("INVALID_VOTER", "Only the spectators of the battle can vote");
     }
-    if (!room.spectators.some((s) => s.id === rating.raterId)) {
-      throw new DomainError("INVALID_RATER", "Only spectators can rate dancers");
+    if (now.getTime() < battle.startedAt.getTime()) {
+      throw new DomainError("BATTLE_NOT_STARTED", "The battle has not started yet; vote once the dancing begins");
     }
-    if (!room.battle.dancerIds.includes(rating.dancerId)) {
-      throw new DomainError("INVALID_DANCER", `Player ${rating.dancerId} is not dancing in this battle`);
+    if (now.getTime() >= battle.endsAt.getTime()) {
+      throw new DomainError("BATTLE_FINISHED", "The song is over; votes are closed");
     }
-    if (!Number.isInteger(rating.score) || rating.score < MIN_SCORE || rating.score > MAX_SCORE) {
-      throw new DomainError("INVALID_SCORE", `Score must be an integer between ${MIN_SCORE} and ${MAX_SCORE}`);
+    // Clients send the dancer over the wire: check it at runtime, not only in the type.
+    const wanted: unknown = dancerId;
+    if (wanted !== null && typeof wanted !== "string") {
+      throw new DomainError("INVALID_MESSAGE", "dancerId must be a dancer id, or null to withdraw the vote");
     }
-    if (room.battle.ratings.some((r) => r.raterId === rating.raterId && r.dancerId === rating.dancerId)) {
-      throw new DomainError("DUPLICATE_RATING", "This spectator already rated this dancer");
+    if (wanted !== null && !battle.dancerIds.includes(wanted)) {
+      throw new DomainError("INVALID_DANCER", `Player ${wanted} is not dancing in this battle`);
     }
-    return {
-      ...room,
-      battle: {
-        ...room.battle,
-        ratings: [...room.battle.ratings, { ...rating, submittedAt: now }],
-      },
-    };
+    const current = battle.votes[voterId] ?? null;
+    if (current === wanted) return room;
+    const votes = { ...battle.votes };
+    if (wanted === null) delete votes[voterId];
+    else votes[voterId] = wanted;
+    return { ...room, battle: { ...battle, votes } };
+  },
+
+  /** The spectator's current vote in the room's battle, or null. */
+  voteOf(room: Room, voterId: string): string | null {
+    return room.battle?.votes[voterId] ?? null;
   },
 
   /**
-   * True when every spectator still in the room rated every dancer still in the
-   * battle. Ratings from players who left are ignored here, so a departure can
-   * neither block nor fake completion.
+   * Closes the battle: votes freeze and the result is computed over the dancers
+   * still in it (ScoringService), then also kept as the room's lastResult.
    */
-  allRatingsSubmitted(room: Room): boolean {
-    if (!room.battle) return false;
-    const { dancerIds, ratings } = room.battle;
-    if (room.spectators.length === 0 || dancerIds.length === 0) return false;
-    return room.spectators.every((spectator) =>
-      dancerIds.every((dancerId) => ratings.some((r) => r.raterId === spectator.id && r.dancerId === dancerId)),
-    );
-  },
-
-  /**
-   * TODO(scoring-HU): a proper tie-break is a separate HU. For now: the highest
-   * total (spectators' ratings plus the word race bonus) wins; more than one
-   * leader at the top score is reported as a draw (winnerId: null).
-   *
-   * Only dancers still in the battle (battle.dancerIds) are scored. Ratings a
-   * dancer received before leaving stay in battle.ratings as history but do not
-   * appear in the result. Ratings from spectators who left still count.
-   */
-  finishBattle(room: Room, now: Date = new Date()): Room {
+  finishBattle(room: Room, reason: BattleEndReason, now: Date = new Date()): Room {
     if (room.status !== "battling" || !room.battle) {
       throw new DomainError("ROOM_NOT_BATTLING", `Room ${room.code} has no battle in progress`);
     }
-    const scores: Record<string, number> = {};
-    for (const dancerId of room.battle.dancerIds) scores[dancerId] = 0;
-    for (const rating of room.battle.ratings) {
-      if (room.battle.dancerIds.includes(rating.dancerId)) scores[rating.dancerId] += rating.score;
-    }
-    for (const dancerId of room.battle.dancerIds) scores[dancerId] += room.battle.bonusPoints[dancerId] ?? 0;
-    const maxScore = Math.max(...Object.values(scores));
-    const leaders = room.battle.dancerIds.filter((id) => scores[id] === maxScore);
-    const result: BattleResult = { scores, winnerId: leaders.length === 1 ? leaders[0] : null };
+    const result = ScoringService.result(room.battle);
     return {
       ...room,
       status: "finished",
-      battle: { ...room.battle, finishedAt: now, result },
+      battle: { ...room.battle, finishedAt: now, endReason: reason, result },
+      lastResult: result,
     };
   },
 
   /**
-   * Finishes a battle still running at battle.endsAt (the song clip plus the
-   * rating grace period), so it ends even with no spectators, after the last
-   * spectator left, or with spectators who never rate. The result is computed
-   * as usual over the remaining dancers from whatever was collected (ratings
-   * plus word bonus); with nothing collected there is no result (null).
-   * Returns the very same room when there is nothing to do (not battling, or
-   * the deadline is not reached yet).
+   * Finishes a battle still running once the song clip ended (battle.endsAt),
+   * with the votes and words collected until then. Returns the very same room
+   * when there is nothing to do (not battling, or the song is not over yet).
    */
   finishAtDeadline(room: Room, now: Date): Room {
     const battle = room.battle;
     if (room.status !== "battling" || !battle || now.getTime() < battle.endsAt.getTime()) return room;
-    const collected =
-      battle.ratings.some((r) => battle.dancerIds.includes(r.dancerId)) ||
-      battle.dancerIds.some((id) => (battle.bonusPoints[id] ?? 0) > 0);
-    if (collected) return RoomService.finishBattle(room, now);
-    return { ...room, status: "finished", battle: { ...battle, finishedAt: now, result: null } };
+    return RoomService.finishBattle(room, "song-end", now);
+  },
+
+  /**
+   * The host takes a finished room back to the lobby for another battle with
+   * the same players (HU 18): roles are kept, everyone's ready flag resets, the
+   * song has to be chosen again, and the result just played stays available as
+   * lastResult.
+   */
+  rematch(room: Room, requesterId: string): Room {
+    if (room.hostId !== requesterId) {
+      throw new DomainError("NOT_HOST", "Only the host can start a rematch");
+    }
+    if (room.status !== "finished") {
+      throw new DomainError("ROOM_NOT_FINISHED", `Room ${room.code} has no finished battle to replay`);
+    }
+    const players = room.players.map((p) => ({ ...p, ready: false }));
+    return {
+      ...room,
+      players,
+      dancers: null,
+      spectators: players.filter((p) => p.role === "spectator"),
+      status: "waiting",
+      battle: null,
+      songSelection: null,
+      selectedSong: null,
+      lastResult: room.battle?.result ?? room.lastResult,
+    };
   },
 };
+
 /**
  * Applies a departure (already removed from players/dancers/spectators) to a
- * running battle. A departed dancer is dropped from battle.dancerIds, so they
- * can no longer be rated and no rating for them is required; ratings they
- * already received are kept in battle.ratings but excluded from the result.
+ * running battle: the leaver's own vote is dropped, and a departed dancer is
+ * withdrawn from battle.dancerIds with every vote for them discarded.
  */
-function settleBattleAfterLeave(room: Room, playerId: string): Room {
+function settleBattleAfterLeave(room: Room, playerId: string, now: Date): Room {
   const battle = room.battle;
   if (room.status !== "battling" || !battle) return room;
-  const remaining: Battle = { ...battle, dancerIds: battle.dancerIds.filter((id) => id !== playerId) };
-  if (remaining.dancerIds.length < MIN_DANCERS_PER_BATTLE) {
-    // Not enough dancers to keep competing: the battle ends early, without a result.
-    return { ...room, status: "finished", battle: { ...remaining, finishedAt: new Date(), result: null } };
-  }
+  const votes = Object.fromEntries(
+    Object.entries(battle.votes).filter(([voterId, dancerId]) => voterId !== playerId && dancerId !== playerId),
+  );
+  const remaining: Battle = { ...battle, dancerIds: battle.dancerIds.filter((id) => id !== playerId), votes };
   const continuing: Room = { ...room, battle: remaining };
-  return RoomService.allRatingsSubmitted(continuing) ? RoomService.finishBattle(continuing) : continuing;
+  // Not enough dancers left to keep competing: the battle ends early.
+  return remaining.dancerIds.length < MIN_DANCERS_PER_BATTLE
+    ? RoomService.finishBattle(continuing, "not-enough-dancers", now)
+    : continuing;
 }

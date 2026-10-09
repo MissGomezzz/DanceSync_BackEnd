@@ -10,7 +10,8 @@ import { KickPlayer } from "../../src/application/usecases/KickPlayer.js";
 import { ReapRooms } from "../../src/application/usecases/ReapRooms.js";
 import { CreateRoom } from "../../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../../src/application/usecases/JoinRoom.js";
-import { RateDancer } from "../../src/application/usecases/RateDancer.js";
+import { CastVote } from "../../src/application/usecases/CastVote.js";
+import { StartRematch } from "../../src/application/usecases/StartRematch.js";
 import { SelectRole } from "../../src/application/usecases/SelectRole.js";
 import { SetReady } from "../../src/application/usecases/SetReady.js";
 import { SendChatMessage } from "../../src/application/usecases/SendChatMessage.js";
@@ -55,7 +56,8 @@ export class SocketHarness {
       selectRole: new SelectRole(this.rooms),
       setReady: new SetReady(this.rooms),
       sendChatMessage: new SendChatMessage(this.rooms),
-      rateDancer: new RateDancer(this.rooms),
+      castVote: new CastVote(this.rooms),
+      startRematch: new StartRematch(this.rooms),
       startSongChallenge: new StartSongChallenge(this.rooms, options.songChallenge),
       submitSongPhrase: new SubmitSongPhrase(this.rooms),
       chooseSong: new ChooseSong(this.rooms),

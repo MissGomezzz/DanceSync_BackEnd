@@ -14,7 +14,8 @@ import { ExpireWordRound } from "../src/application/usecases/ExpireWordRound.js"
 import { GetActiveWordRound } from "../src/application/usecases/GetActiveWordRound.js";
 import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
 import { OpenWordRound } from "../src/application/usecases/OpenWordRound.js";
-import { RateDancer } from "../src/application/usecases/RateDancer.js";
+import { CastVote } from "../src/application/usecases/CastVote.js";
+import { StartRematch } from "../src/application/usecases/StartRematch.js";
 import { SelectRole } from "../src/application/usecases/SelectRole.js";
 import { SetReady } from "../src/application/usecases/SetReady.js";
 import { SendChatMessage } from "../src/application/usecases/SendChatMessage.js";
@@ -31,7 +32,7 @@ import type { WordRoundEndedPayload, WordRoundStartedPayload } from "../src/infr
 import { registerSocketHandlers, type BattleServer, type SocketHandlersHandle } from "../src/infrastructure/ws/socketHandlers.js";
 import { createSocketWordRaceBroadcaster } from "../src/infrastructure/ws/wordRaceMessages.js";
 import { pickSong, readyUp } from "./support/ready.js";
-import type { Room } from "../src/domain/model/Room.js";
+import type { RoomDto } from "../src/infrastructure/serialization/roomDto.js";
 import { AwardWordBonus } from "../src/application/usecases/AwardWordBonus.js";
 
 /** Round openings (ms after the battle starts) and window, shrunk so the test runs in about a second. */
@@ -54,7 +55,7 @@ interface Recorded {
   socket: ClientSocket;
   started: WordRoundStartedPayload[];
   ended: WordRoundEndedPayload[];
-  updates: Room[];
+  updates: RoomDto[];
 }
 
 function emit<T>(socket: ClientSocket, event: string, payload: unknown): Promise<AckResponse<T>> {
@@ -82,7 +83,7 @@ async function client(): Promise<Recorded> {
   const recorded: Recorded = { socket, started: [], ended: [], updates: [] };
   socket.on("word:round-started", (payload: WordRoundStartedPayload) => recorded.started.push(payload));
   socket.on("word:round-ended", (payload: WordRoundEndedPayload) => recorded.ended.push(payload));
-  socket.on("room:updated", (room: Room) => recorded.updates.push(room));
+  socket.on("room:updated", (room: RoomDto) => recorded.updates.push(room));
   await new Promise<void>((resolve) => socket.on("connect", () => resolve()));
   return recorded;
 }
@@ -133,7 +134,8 @@ before(async () => {
     selectRole: new SelectRole(rooms),
     setReady: new SetReady(rooms),
     sendChatMessage: new SendChatMessage(rooms),
-    rateDancer: new RateDancer(rooms),
+    castVote: new CastVote(rooms),
+    startRematch: new StartRematch(rooms),
     startSongChallenge: new StartSongChallenge(rooms),
     submitSongPhrase: new SubmitSongPhrase(rooms),
     chooseSong: new ChooseSong(rooms),
@@ -190,12 +192,16 @@ describe("Word race over Socket.IO", () => {
       assert.deepEqual(ended[0].wins, { host: winnerId === "host" ? 1 : 0, guest: winnerId === "guest" ? 1 : 0 });
       assert.equal(ended[0].bonusPoints, 1, "the round winner earns the bonus");
     }
-    // The bonus is registered at once, for the winner only, and is visible to the whole room.
+    // The win is counted at once, for the winner only, and the whole room sees it in the live ranking.
     const stored = (await rooms.findByCode(code))!;
-    assert.deepEqual(stored.battle!.bonusPoints, { host: winnerId === "host" ? 1 : 0, guest: winnerId === "guest" ? 1 : 0 });
+    assert.deepEqual(stored.battle!.wordsWon, { host: winnerId === "host" ? 1 : 0, guest: winnerId === "guest" ? 1 : 0 });
     await waitUntil(
-      () => fan.updates.some((r) => r.battle?.bonusPoints[winnerId] === 1),
-      "the spectator to see the bonus in room:updated",
+      () =>
+        fan.updates.some((r) => {
+          const top = r.battle?.standings[0];
+          return top?.dancerId === winnerId && top.wordsWon === 1 && top.score === 1 && top.rank === 1;
+        }),
+      "the spectator to see the word win in the live standings",
     );
 
     const spectator = await submit(fan, code, "fan", round.roundId, round.word);
@@ -203,9 +209,9 @@ describe("Word race over Socket.IO", () => {
     const impersonation = await submit(fan, code, "host", round.roundId, round.word);
     assert.equal(!impersonation.ok && impersonation.error.code, "PLAYER_NOT_IN_ROOM");
 
-    // Finishing the battle (every spectator rated every dancer) stops the race.
-    await ok(fan.socket, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "host", score: 4 });
-    await ok(fan.socket, "rating:submit", { roomCode: code, raterId: "fan", dancerId: "guest", score: 3 });
+    // Finishing the battle (a dancer leaves, too few are left) stops the race.
+    await ok(guest.socket, "room:leave", { roomCode: code, playerId: "guest" });
+    assert.equal((await rooms.findByCode(code))!.status, "finished");
     assert.equal(scheduler.pendingTimers(code), 0);
     await sleep(OFFSETS_MS[1] + 100);
     assert.ok(everyone.every((r) => r.started.length === 1), "a round started after the battle finished");
@@ -221,7 +227,7 @@ describe("Word race over Socket.IO", () => {
     const typo = await submit(host, code, "host", first.roundId, `${first.word}x`);
     assert.ok(typo.ok);
     assert.deepEqual(typo.data, { outcome: "incorrect", winnerId: null });
-    assert.deepEqual((await rooms.findByCode(code))!.battle!.bonusPoints, { host: 0, guest: 0 }, "a typo earns nothing");
+    assert.deepEqual((await rooms.findByCode(code))!.battle!.wordsWon, { host: 0, guest: 0 }, "a typo earns nothing");
     const retry = await submit(host, code, "host", first.roundId, ` ${first.word.toUpperCase()} `);
     assert.ok(retry.ok);
     assert.equal(retry.data.outcome, "won");
@@ -246,11 +252,11 @@ describe("Word race over Socket.IO", () => {
       assert.equal(ended.bonusPoints, 0, "an unanswered round pays no bonus");
     }
     // The round that expired leaves the bonus won earlier untouched.
-    assert.deepEqual((await rooms.findByCode(code))!.battle!.bonusPoints, { host: 1, guest: 0 });
+    assert.deepEqual((await rooms.findByCode(code))!.battle!.wordsWon, { host: 1, guest: 0 });
     const late = await submit(guest, code, "guest", second.roundId, second.word);
     assert.ok(late.ok);
     assert.equal(late.data.outcome, "expired");
-    assert.deepEqual((await rooms.findByCode(code))!.battle!.bonusPoints, { host: 1, guest: 0 }, "a late answer earns nothing");
+    assert.deepEqual((await rooms.findByCode(code))!.battle!.wordsWon, { host: 1, guest: 0 }, "a late answer earns nothing");
 
     // Everyone leaves: the room is deleted and no further round may start.
     await ok(fan.socket, "room:leave", { roomCode: code, playerId: "fan" });

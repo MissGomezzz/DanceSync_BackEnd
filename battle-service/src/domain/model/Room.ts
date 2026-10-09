@@ -1,4 +1,4 @@
-import type { Battle } from "./Battle.js";
+import type { Battle, BattleResult } from "./Battle.js";
 import type { Player } from "./Player.js";
 import type { Song } from "./Song.js";
 import type { SongSelection } from "./SongSelection.js";
@@ -21,6 +21,11 @@ export interface Room {
   songSelection: SongSelection | null;
   /** Song chosen through the challenge; the next battle is danced to it. */
   selectedSong: Song | null;
+  /**
+   * Result of the latest finished battle. Set when a battle finishes and kept
+   * across a rematch, so the lobby can show the "Last battle".
+   */
+  lastResult: BattleResult | null;
   createdAt: Date;
   /**
    * Optimistic concurrency version: 0 when created, +1 on every stored change

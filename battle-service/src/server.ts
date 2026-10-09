@@ -7,7 +7,8 @@ import { FinishBattleAtDeadline } from "./application/usecases/FinishBattleAtDea
 import { JoinRoom } from "./application/usecases/JoinRoom.js";
 import { KickPlayer } from "./application/usecases/KickPlayer.js";
 import { ReapRooms } from "./application/usecases/ReapRooms.js";
-import { RateDancer } from "./application/usecases/RateDancer.js";
+import { CastVote } from "./application/usecases/CastVote.js";
+import { StartRematch } from "./application/usecases/StartRematch.js";
 import { SendChatMessage } from "./application/usecases/SendChatMessage.js";
 import { StartBattle } from "./application/usecases/StartBattle.js";
 import { env } from "./config/env.js";
@@ -37,12 +38,11 @@ const createRoom = new CreateRoom(rooms);
 const joinRoom = new JoinRoom(rooms);
 const battleTiming = {
   countdownMs: env.battleStartCountdownMs,
-  ratingGraceMs: env.ratingGraceMs,
   fallbackDurationMs: env.wordRaceFallbackDurationMs,
+  scoring: { votePoints: env.votePoints, wordBonusPoints: env.wordBonusPoints },
 };
 const startBattle = new StartBattle(rooms, battleTiming);
 const sendChatMessage = new SendChatMessage(rooms);
-const rateDancer = new RateDancer(rooms);
 const selectRole = new SelectRole(rooms);
 const setReady = new SetReady(rooms);
 const startSongChallenge = new StartSongChallenge(rooms, {
@@ -79,7 +79,8 @@ const socketHandlers = registerSocketHandlers(io, {
   selectRole,
   setReady,
   sendChatMessage,
-  rateDancer,
+  castVote: new CastVote(rooms),
+  startRematch: new StartRematch(rooms),
   startSongChallenge,
   submitSongPhrase,
   chooseSong,
@@ -90,7 +91,7 @@ const socketHandlers = registerSocketHandlers(io, {
   wordRace: {
     scheduler: wordRaceScheduler,
     submitWord: new SubmitWord(wordRaces),
-    awardWordBonus: new AwardWordBonus(rooms, env.wordBonusPoints),
+    awardWordBonus: new AwardWordBonus(rooms),
     getActiveWordRound: new GetActiveWordRound(wordRaces),
   },
 });
