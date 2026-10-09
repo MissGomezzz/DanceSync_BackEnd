@@ -29,7 +29,7 @@ function battling(durationSeconds: number | null = null): Room {
   room = RoomService.selectRole(room, "s", "spectator");
   room = RoomService.startBattle(startable(room));
   // The timeline tests choose the song length themselves (or none).
-  const song = durationSeconds === null ? null : { id: "x", title: "X", artist: "Y", durationSeconds };
+  const song = durationSeconds === null ? null : { id: "x", title: "X", artist: "Y", durationSeconds,youtubeId: 'test-youtube-id' };
   return { ...room, battle: { ...room.battle!, song } };
 }
 
