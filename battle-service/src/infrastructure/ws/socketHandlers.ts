@@ -101,6 +101,12 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    */
   const graceTimers = new Map<string, NodeJS.Timeout>();
   const roomTimers = new RoomTimers();
+  /**
+   * Version of the room state the timers were last armed from. Two handlers can
+   * publish out of order (version N after N+1); an older state must not clear or
+   * replace the deadlines derived from a newer one.
+   */
+  const armedVersions = new Map<string, number>();
   /** Rooms created over HTTP waiting for their host's first socket. */
   const newRoomTimers = new Map<string, NodeJS.Timeout>();
   /** When each seat was last seen without any bound socket (seatKey -> epoch ms). */
@@ -123,6 +129,9 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
   /** Derives the pending deadlines of a room from its state; anything not pending is cleared. */
   function armRoomTimers(room: Room): void {
+    const key = room.code.toUpperCase();
+    if (room.version < (armedVersions.get(key) ?? -1)) return;
+    armedVersions.set(key, room.version);
     const selection = room.songSelection;
     if (room.status === "waiting" && selection?.phase === "typing") {
       const challengeId = selection.challenge.id;
@@ -211,7 +220,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   async function announceLeave(roomCode: string, { room, battleFinished }: LeaveRoomOutput): Promise<void> {
     if (!room) {
       // The last player left: the room is gone, and so is every timer it had.
-      roomTimers.clearRoom(roomCode);
+      forgetRoomTimers(roomCode);
       await deps.wordRace?.scheduler.stop(roomCode);
       return;
     }
@@ -221,6 +230,11 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     }
     publishRoom(room);
     if (room.status !== "battling") await deps.wordRace?.scheduler.stop(room.code);
+  }
+
+  function forgetRoomTimers(roomCode: string): void {
+    roomTimers.clearRoom(roomCode);
+    armedVersions.delete(roomCode.toUpperCase());
   }
 
   function cancelGrace(roomCode: string, playerId: string): void {
@@ -543,6 +557,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       newRoomTimers.clear();
       clearInterval(sweepTimer);
       roomTimers.close();
+      armedVersions.clear();
     },
   };
 }
