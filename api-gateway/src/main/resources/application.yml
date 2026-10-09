@@ -27,6 +27,16 @@ spring:
                 allowed-headers: "*"
                 allow-credentials: true
           routes:
+            # Final match results (HU 21) are read-only through the gateway:
+            # battle-service stores them with PUT directly on users-service,
+            # so any other method on /api/matches gets a 404 here.
+            - id: users-service-matches
+              uri: ${USERS_SERVICE_URL:http://localhost:8081}
+              predicates:
+                - Path=/api/matches,/api/matches/**
+                - Method=GET
+              filters:
+                - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Vary, RETAIN_UNIQUE
             - id: users-service
               uri: ${USERS_SERVICE_URL:http://localhost:8081}
               predicates:
