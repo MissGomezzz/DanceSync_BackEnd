@@ -22,6 +22,10 @@ export class InMemoryRoomRepository implements RoomRepository {
     return room ? structuredClone(room) : undefined;
   }
 
+  async listCodes(): Promise<string[]> {
+    return [...this.rooms.values()].map((room) => room.code);
+  }
+
   async insert(room: Room): Promise<boolean> {
     if (this.rooms.has(key(room.code))) return false;
     this.rooms.set(key(room.code), structuredClone(room));

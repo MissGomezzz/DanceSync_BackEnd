@@ -7,6 +7,7 @@ import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { ChooseSong } from "../src/application/usecases/ChooseSong.js";
 import { FinishBattleAtDeadline } from "../src/application/usecases/FinishBattleAtDeadline.js";
 import { KickPlayer } from "../src/application/usecases/KickPlayer.js";
+import { ReapRooms } from "../src/application/usecases/ReapRooms.js";
 import { CreateRoom } from "../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
 import { RateDancer } from "../src/application/usecases/RateDancer.js";
@@ -19,13 +20,14 @@ import { SubmitSongPhrase } from "../src/application/usecases/SubmitSongPhrase.j
 import type { ChatMessage } from "../src/domain/model/ChatMessage.js";
 import type { Room } from "../src/domain/model/Room.js";
 import { InMemoryRoomRepository } from "../src/infrastructure/persistence/InMemoryRoomRepository.js";
-import { registerSocketHandlers, type BattleServer } from "../src/infrastructure/ws/socketHandlers.js";
+import { registerSocketHandlers, type BattleServer, type SocketHandlersHandle } from "../src/infrastructure/ws/socketHandlers.js";
 import { pickSong, readyUp } from "./support/ready.js";
 
 type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
 let httpServer: HttpServer;
 let io: BattleServer;
+let handlers: SocketHandlersHandle;
 let url: string;
 let rooms: InMemoryRoomRepository;
 let createRoom: CreateRoom;
@@ -90,7 +92,7 @@ before(async () => {
   createRoom = new CreateRoom(rooms);
   httpServer = createServer();
   io = new Server(httpServer, { path: "/socket.io" });
-  registerSocketHandlers(io, {
+  handlers = registerSocketHandlers(io, {
     joinRoom: new JoinRoom(rooms),
     startBattle: new StartBattle(rooms),
     selectRole: new SelectRole(rooms),
@@ -102,6 +104,7 @@ before(async () => {
     chooseSong: new ChooseSong(rooms),
     finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
     kickPlayer: new KickPlayer(rooms),
+    reapRooms: new ReapRooms(rooms),
     disconnectGraceMs: 50,
   });
   await new Promise<void>((resolve) => httpServer.listen(0, resolve));
@@ -110,6 +113,7 @@ before(async () => {
 
 after(async () => {
   for (const socket of clients) socket.disconnect();
+  handlers.close();
   await io.close();
 });
 

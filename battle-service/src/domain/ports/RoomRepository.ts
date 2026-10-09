@@ -28,6 +28,12 @@ export interface RoomRepository {
   findByCode(code: string): Promise<Room | undefined>;
 
   /**
+   * Codes of every stored room, for housekeeping (releasing abandoned seats,
+   * deleting empty rooms). SQL: `SELECT code FROM rooms`; Redis: `SCAN` on room:*.
+   */
+  listCodes(): Promise<string[]>;
+
+  /**
    * Stores a brand-new room. Returns false, writing nothing, when the code is
    * already taken.
    *

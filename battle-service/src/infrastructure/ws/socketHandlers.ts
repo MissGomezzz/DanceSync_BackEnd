@@ -1,6 +1,7 @@
 import type { Server, Socket } from "socket.io";
 import type { JoinRoom, LeaveRoomOutput } from "../../application/usecases/JoinRoom.js";
 import type { KickPlayer } from "../../application/usecases/KickPlayer.js";
+import type { ReapRooms } from "../../application/usecases/ReapRooms.js";
 import type { RateDancer } from "../../application/usecases/RateDancer.js";
 import type { SendChatMessage } from "../../application/usecases/SendChatMessage.js";
 import type { StartBattle } from "../../application/usecases/StartBattle.js";
@@ -46,8 +47,12 @@ export interface SocketDependencies {
   kickPlayer: KickPlayer;
   /** Ends a battle still running at battle.endsAt (song clip plus rating grace). */
   finishBattleAtDeadline: FinishBattleAtDeadline;
+  /** Lists rooms and deletes empty ones for the abandoned-room sweep. */
+  reapRooms: ReapRooms;
   /** Seat retention after a disconnect, see env.disconnectGraceMs. */
   disconnectGraceMs: number;
+  /** Abandoned-room housekeeping timings; defaults suit production. */
+  reaping?: ReapingOptions;
   /** Mid-battle word race. Optional so harnesses that do not exercise it can omit it. */
   wordRace?: WordRaceSocketDependencies;
 }
@@ -59,9 +64,31 @@ export interface WordRaceSocketDependencies {
   getActiveWordRound: GetActiveWordRound;
 }
 
+export interface ReapingOptions {
+  /**
+   * How long a room created over HTTP waits for its host's socket before the
+   * host's seat is released (and the then empty room deleted).
+   * Default: disconnectGraceMs + 5 s.
+   */
+  createdRoomGraceMs?: number;
+  /** Interval of the sweep releasing seats without a socket. Default: 60 s. */
+  sweepIntervalMs?: number;
+}
+
+const CREATED_ROOM_MARGIN_MS = 5_000;
+const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
+
 /** Lets the owner stop every timer the handlers own (tests, graceful shutdown). */
 export interface SocketHandlersHandle {
+  /** Stops every timer (grace, deadlines, reaping); call on shutdown. */
   close(): void;
+  /**
+   * A room was just created over HTTP: if its host never binds a socket to it
+   * within createdRoomGraceMs, the seat is released and the empty room deleted.
+   */
+  watchNewRoom(roomCode: string, hostId: string): void;
+  /** One pass of the periodic sweep (also run every sweepIntervalMs). */
+  sweep(): Promise<void>;
   /** Deadline timers per room (song challenge, ...), exposed so tests can prove nothing leaks. */
   readonly roomTimers: RoomTimers;
 }
@@ -74,6 +101,15 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    */
   const graceTimers = new Map<string, NodeJS.Timeout>();
   const roomTimers = new RoomTimers();
+  /** Rooms created over HTTP waiting for their host's first socket. */
+  const newRoomTimers = new Map<string, NodeJS.Timeout>();
+  /** When each seat was last seen without any bound socket (seatKey -> epoch ms). */
+  const unboundSince = new Map<string, number>();
+  const createdRoomGraceMs = deps.reaping?.createdRoomGraceMs ?? deps.disconnectGraceMs + CREATED_ROOM_MARGIN_MS;
+  const sweepTimer = setInterval(() => {
+    sweep().catch((error: unknown) => console.error("Error sweeping abandoned rooms", error));
+  }, deps.reaping?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
+  sweepTimer.unref();
 
   /**
    * Single exit for every room:updated: serializes the room (relative times
@@ -196,6 +232,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   function scheduleGrace(roomCode: string, playerId: string): void {
     cancelGrace(roomCode, playerId);
     const key = seatKey(roomCode, playerId);
+    if (!unboundSince.has(key)) unboundSince.set(key, Date.now());
     const timer = setTimeout(() => {
       graceTimers.delete(key);
       void releaseSeatIfAbandoned(roomCode, playerId);
@@ -233,13 +270,70 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
   async function releaseSeatIfAbandoned(roomCode: string, playerId: string): Promise<void> {
     try {
-      const sockets = await io.in(roomCode).fetchSockets();
-      if (sockets.some((s) => s.data.playerId === playerId)) return; // Player is back.
+      if (await isBound(roomCode, playerId)) return; // Player is back.
       await leaveRoom(roomCode, playerId);
     } catch (error) {
       // The player may have left explicitly or the room may already be gone.
       if (!(error instanceof DomainError)) console.error("Error releasing abandoned seat", error);
     }
+  }
+
+  async function isBound(roomCode: string, playerId: string): Promise<boolean> {
+    const sockets = await io.in(roomCode).fetchSockets();
+    return sockets.some((s) => s.data.playerId === playerId);
+  }
+
+  function watchNewRoom(roomCode: string, hostId: string): void {
+    const key = seatKey(roomCode, hostId);
+    unboundSince.set(key, Date.now());
+    clearTimeout(newRoomTimers.get(key));
+    const timer = setTimeout(() => {
+      newRoomTimers.delete(key);
+      // A pending disconnect grace means the host did connect: that timer decides.
+      if (graceTimers.has(key)) return;
+      void releaseSeatIfAbandoned(roomCode, hostId);
+    }, createdRoomGraceMs);
+    timer.unref();
+    newRoomTimers.set(key, timer);
+  }
+
+  /**
+   * Safety net behind the grace timers: releases every seat that has had no
+   * bound socket for longer than the disconnect grace period (through the
+   * normal leave path, which also finishes a battle the departure ends),
+   * deletes rooms left empty, and re-arms each room's deadlines, which settles
+   * any deadline whose timer did not run.
+   */
+  async function sweep(): Promise<void> {
+    const now = Date.now();
+    const seen = new Set<string>();
+    for (const room of await deps.reapRooms.list()) {
+      if (room.players.length === 0) {
+        if (await deps.reapRooms.deleteIfEmpty(room.code)) await announceLeave(room.code, { room: null, battleFinished: false });
+        continue;
+      }
+      armRoomTimers(room);
+      const bound = new Set((await io.in(room.code).fetchSockets()).map((s) => s.data.playerId));
+      for (const player of room.players) {
+        const key = seatKey(room.code, player.id);
+        seen.add(key);
+        if (bound.has(player.id)) {
+          unboundSince.delete(key);
+          continue;
+        }
+        // A pending grace or new-room timer will decide this seat on its own.
+        if (graceTimers.has(key) || newRoomTimers.has(key)) continue;
+        const since = unboundSince.get(key);
+        if (since === undefined) {
+          unboundSince.set(key, now);
+        } else if (now - since >= deps.disconnectGraceMs) {
+          unboundSince.delete(key);
+          await releaseSeatIfAbandoned(room.code, player.id);
+        }
+      }
+    }
+    // Forget seats that no longer exist.
+    for (const key of unboundSince.keys()) if (!seen.has(key)) unboundSince.delete(key);
   }
 
   /** Joining as someone else or somewhere else first releases the seat bound so far. */
@@ -277,6 +371,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
           if (previousRoom.toUpperCase() === room.code.toUpperCase()) room = await deps.joinRoom.execute(payload);
         }
         cancelGrace(room.code, playerId);
+        unboundSince.delete(seatKey(room.code, playerId));
         socket.data.playerId = playerId;
         socket.data.roomCode = room.code;
         await socket.join(room.code);
@@ -439,9 +534,14 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
   return {
     roomTimers,
+    watchNewRoom,
+    sweep,
     close() {
       for (const timer of graceTimers.values()) clearTimeout(timer);
       graceTimers.clear();
+      for (const timer of newRoomTimers.values()) clearTimeout(timer);
+      newRoomTimers.clear();
+      clearInterval(sweepTimer);
       roomTimers.close();
     },
   };

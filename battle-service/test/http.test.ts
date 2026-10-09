@@ -9,12 +9,13 @@ import { InMemoryRoomRepository } from "../src/infrastructure/persistence/InMemo
 
 let server: Server;
 let base: string;
+const created: string[] = [];
 
 before(async () => {
   const rooms = new InMemoryRoomRepository();
   const app = express();
   app.use(express.json());
-  app.use(buildRouter({ createRoom: new CreateRoom(rooms), rooms }));
+  app.use(buildRouter({ createRoom: new CreateRoom(rooms), rooms, onRoomCreated: (room) => created.push(room.code) }));
   app.use(errorHandler);
   server = app.listen(0);
   await new Promise<void>((resolve) => server.once("listening", () => resolve()));
@@ -38,6 +39,7 @@ describe("HTTP API", () => {
 
     const fetched = await fetch(`${base}/api/rooms/${room.code.toLowerCase()}`);
     assert.equal(fetched.status, 200);
+    assert.ok(created.includes(room.code), "the created room was not handed over for reaping");
   });
 
   it("POST /api/rooms rejects invalid identities with 400 INVALID_PLAYER", async () => {

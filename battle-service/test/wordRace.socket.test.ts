@@ -8,6 +8,7 @@ import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { ChooseSong } from "../src/application/usecases/ChooseSong.js";
 import { FinishBattleAtDeadline } from "../src/application/usecases/FinishBattleAtDeadline.js";
 import { KickPlayer } from "../src/application/usecases/KickPlayer.js";
+import { ReapRooms } from "../src/application/usecases/ReapRooms.js";
 import { CreateRoom } from "../src/application/usecases/CreateRoom.js";
 import { ExpireWordRound } from "../src/application/usecases/ExpireWordRound.js";
 import { GetActiveWordRound } from "../src/application/usecases/GetActiveWordRound.js";
@@ -27,7 +28,7 @@ import { InMemoryRoomRepository } from "../src/infrastructure/persistence/InMemo
 import { InMemoryWordRaceRepository } from "../src/infrastructure/persistence/InMemoryWordRaceRepository.js";
 import { WordRaceScheduler } from "../src/infrastructure/scheduling/WordRaceScheduler.js";
 import type { WordRoundEndedPayload, WordRoundStartedPayload } from "../src/infrastructure/ws/events.js";
-import { registerSocketHandlers, type BattleServer } from "../src/infrastructure/ws/socketHandlers.js";
+import { registerSocketHandlers, type BattleServer, type SocketHandlersHandle } from "../src/infrastructure/ws/socketHandlers.js";
 import { createSocketWordRaceBroadcaster } from "../src/infrastructure/ws/wordRaceMessages.js";
 import { pickSong, readyUp } from "./support/ready.js";
 import type { Room } from "../src/domain/model/Room.js";
@@ -42,6 +43,7 @@ type SubmitAck = { outcome: string; winnerId: string | null };
 
 let httpServer: HttpServer;
 let io: BattleServer;
+let handlers: SocketHandlersHandle;
 let url: string;
 let createRoom: CreateRoom;
 let rooms: InMemoryRoomRepository;
@@ -125,7 +127,7 @@ before(async () => {
     stopWordRace: new StopWordRace(races),
     broadcaster: createSocketWordRaceBroadcaster(io),
   });
-  registerSocketHandlers(io, {
+  handlers = registerSocketHandlers(io, {
     joinRoom: new JoinRoom(rooms),
     startBattle: new StartBattle(rooms),
     selectRole: new SelectRole(rooms),
@@ -137,6 +139,7 @@ before(async () => {
     chooseSong: new ChooseSong(rooms),
     finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
     kickPlayer: new KickPlayer(rooms),
+    reapRooms: new ReapRooms(rooms),
     disconnectGraceMs: 50,
     wordRace: { scheduler, submitWord: new SubmitWord(races), awardWordBonus: new AwardWordBonus(rooms), getActiveWordRound: new GetActiveWordRound(races) },
   });
@@ -146,6 +149,7 @@ before(async () => {
 
 after(async () => {
   for (const socket of clients) socket.disconnect();
+  handlers.close();
   await io.close();
   assert.equal(scheduler.pendingTimers(), 0, "word race timers leaked");
 });

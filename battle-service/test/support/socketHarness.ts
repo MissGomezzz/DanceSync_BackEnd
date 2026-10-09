@@ -7,6 +7,7 @@ import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { ChooseSong } from "../../src/application/usecases/ChooseSong.js";
 import { FinishBattleAtDeadline } from "../../src/application/usecases/FinishBattleAtDeadline.js";
 import { KickPlayer } from "../../src/application/usecases/KickPlayer.js";
+import { ReapRooms } from "../../src/application/usecases/ReapRooms.js";
 import { CreateRoom } from "../../src/application/usecases/CreateRoom.js";
 import { JoinRoom } from "../../src/application/usecases/JoinRoom.js";
 import { RateDancer } from "../../src/application/usecases/RateDancer.js";
@@ -20,6 +21,7 @@ import { InMemoryRoomRepository } from "../../src/infrastructure/persistence/InM
 import {
   registerSocketHandlers,
   type BattleServer,
+  type ReapingOptions,
   type SocketDependencies,
   type SocketHandlersHandle,
 } from "../../src/infrastructure/ws/socketHandlers.js";
@@ -28,6 +30,7 @@ export type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code:
 
 export interface HarnessOptions {
   disconnectGraceMs?: number;
+  reaping?: ReapingOptions;
   songChallenge?: SongChallengeOptions;
   /** Extra or replaced dependencies, built with the harness repository. */
   extend?: (rooms: InMemoryRoomRepository) => Partial<SocketDependencies>;
@@ -58,7 +61,9 @@ export class SocketHarness {
       chooseSong: new ChooseSong(this.rooms),
       finishBattleAtDeadline: new FinishBattleAtDeadline(this.rooms),
       kickPlayer: new KickPlayer(this.rooms),
+      reapRooms: new ReapRooms(this.rooms),
       disconnectGraceMs: options.disconnectGraceMs ?? 50,
+      reaping: options.reaping,
       ...options.extend?.(this.rooms),
     });
     await new Promise<void>((resolve) => this.httpServer.listen(0, resolve));
@@ -81,8 +86,12 @@ export class SocketHarness {
 
   /** Deadline timers owned by the socket handlers. */
   roomTimers() {
+    return this.handlers().roomTimers;
+  }
+
+  handlers(): SocketHandlersHandle {
     assert.ok(this.handle, "the harness is not started");
-    return this.handle.roomTimers;
+    return this.handle;
   }
 
   async storedRoom(code: string) {

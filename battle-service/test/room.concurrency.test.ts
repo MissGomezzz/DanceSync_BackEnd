@@ -36,6 +36,11 @@ class LatencyRoomRepository implements RoomRepository {
     return this.inner.findByCode(code);
   }
 
+  async listCodes(): Promise<string[]> {
+    await roundTrip();
+    return this.inner.listCodes();
+  }
+
   async insert(room: Room): Promise<boolean> {
     await roundTrip();
     return this.inner.insert(room);
@@ -63,6 +68,11 @@ class RemoteRoomStore implements RoomRepository {
     await roundTrip();
     const row = this.rows.get(code);
     return row ? structuredClone(row) : undefined;
+  }
+
+  async listCodes(): Promise<string[]> {
+    await roundTrip();
+    return [...this.rows.keys()];
   }
 
   async insert(room: Room): Promise<boolean> {

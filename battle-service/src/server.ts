@@ -6,6 +6,7 @@ import { CreateRoom } from "./application/usecases/CreateRoom.js";
 import { FinishBattleAtDeadline } from "./application/usecases/FinishBattleAtDeadline.js";
 import { JoinRoom } from "./application/usecases/JoinRoom.js";
 import { KickPlayer } from "./application/usecases/KickPlayer.js";
+import { ReapRooms } from "./application/usecases/ReapRooms.js";
 import { RateDancer } from "./application/usecases/RateDancer.js";
 import { SendChatMessage } from "./application/usecases/SendChatMessage.js";
 import { StartBattle } from "./application/usecases/StartBattle.js";
@@ -54,8 +55,6 @@ const chooseSong = new ChooseSong(rooms, battleTiming);
 const app = express();
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
 app.use(express.json());
-app.use(buildRouter({ createRoom, rooms }));
-app.use(errorHandler);
 
 const httpServer = createServer(app);
 const io: BattleServer = new Server(httpServer, {
@@ -74,7 +73,7 @@ const wordRaceScheduler = new WordRaceScheduler({
   stopWordRace: new StopWordRace(wordRaces),
   broadcaster: createSocketWordRaceBroadcaster(io),
 });
-registerSocketHandlers(io, {
+const socketHandlers = registerSocketHandlers(io, {
   joinRoom,
   startBattle,
   selectRole,
@@ -86,6 +85,7 @@ registerSocketHandlers(io, {
   chooseSong,
   kickPlayer: new KickPlayer(rooms),
   finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
+  reapRooms: new ReapRooms(rooms),
   disconnectGraceMs: env.disconnectGraceMs,
   wordRace: {
     scheduler: wordRaceScheduler,
@@ -95,12 +95,24 @@ registerSocketHandlers(io, {
   },
 });
 
+// HTTP routes go after the socket handlers so a created room can be watched:
+// if its host never connects, the room is reaped instead of living forever.
+app.use(
+  buildRouter({
+    createRoom,
+    rooms,
+    onRoomCreated: (room) => socketHandlers.watchNewRoom(room.code, room.hostId),
+  }),
+);
+app.use(errorHandler);
+
 httpServer.listen(env.port, () => {
   console.log(`battle-service listening on http://localhost:${env.port} (CORS origin: ${env.corsOrigin})`);
 });
 
 function shutdown(signal: string): void {
   console.log(`${signal} received, shutting down battle-service`);
+  socketHandlers.close();
   io.close();
   httpServer.close(() => process.exit(0));
 }
