@@ -56,4 +56,16 @@ describe("HTTP API", () => {
       assert.equal(((await response.json()) as { code: string }).code, "INVALID_PLAYER");
     }
   });
+
+  it("answers 400 with a JSON error, not 500, when the body is malformed JSON", async () => {
+    const response = await post("/api/rooms", '{"hostId": "host", "displayName": ');
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: "Malformed JSON body" });
+  });
+
+  it("keeps the 4xx status of other middleware errors (payload too large)", async () => {
+    const response = await post("/api/rooms", JSON.stringify({ hostId: "host", displayName: "x".repeat(200_000) }));
+    assert.equal(response.status, 413);
+    assert.deepEqual(await response.json(), { error: "Invalid request" });
+  });
 });

@@ -76,6 +76,23 @@ export function errorHandler(error: unknown, _req: Request, res: Response, _next
     res.status(STATUS_BY_CODE[error.code] ?? 400).json({ error: error.message, code: error.code });
     return;
   }
+  // Errors raised by Express middleware (express.json and friends) carry the
+  // client error status they mean: a malformed body is the client's fault, not a 500.
+  const clientStatus = clientErrorStatus(error);
+  if (clientStatus !== null) {
+    const isParseError = (error as { type?: unknown }).type === "entity.parse.failed";
+    res.status(clientStatus).json({ error: isParseError ? "Malformed JSON body" : "Invalid request" });
+    return;
+  }
   console.error("Unhandled error", error);
   res.status(500).json({ error: "Internal server error" });
+}
+
+/** The 4xx status of a middleware error (body-parser sets `status`/`statusCode`), or null. */
+function clientErrorStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null) return null;
+  const { type, status, statusCode } = error as { type?: unknown; status?: unknown; statusCode?: unknown };
+  const code = typeof status === "number" ? status : typeof statusCode === "number" ? statusCode : null;
+  if (code !== null && Number.isInteger(code) && code >= 400 && code < 500) return code;
+  return type === "entity.parse.failed" ? 400 : null;
 }
