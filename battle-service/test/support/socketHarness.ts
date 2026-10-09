@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
+import express from "express";
 import { Server } from "socket.io";
 import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { ChooseSong } from "../../src/application/usecases/ChooseSong.js";
@@ -18,6 +19,7 @@ import { SendChatMessage } from "../../src/application/usecases/SendChatMessage.
 import { StartBattle } from "../../src/application/usecases/StartBattle.js";
 import { StartSongChallenge, type SongChallengeOptions } from "../../src/application/usecases/StartSongChallenge.js";
 import { SubmitSongPhrase } from "../../src/application/usecases/SubmitSongPhrase.js";
+import { buildRouter, errorHandler } from "../../src/infrastructure/http/routes.js";
 import { InMemoryRoomRepository } from "../../src/infrastructure/persistence/InMemoryRoomRepository.js";
 import {
   registerSocketHandlers,
@@ -31,13 +33,14 @@ export type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code:
 
 export interface HarnessOptions {
   disconnectGraceMs?: number;
+  pagehideGraceMs?: number;
   reaping?: ReapingOptions;
   songChallenge?: SongChallengeOptions;
   /** Extra or replaced dependencies, built with the harness repository. */
   extend?: (rooms: InMemoryRoomRepository) => Partial<SocketDependencies>;
 }
 
-/** In-process battle-service (Socket.IO only) on a random port, plus client helpers. */
+/** In-process battle-service (Socket.IO plus the HTTP routes) on a random port, plus client helpers. */
 export class SocketHarness {
   readonly rooms = new InMemoryRoomRepository();
   readonly createRoom = new CreateRoom(this.rooms);
@@ -48,7 +51,9 @@ export class SocketHarness {
   private handle: SocketHandlersHandle | undefined;
 
   async start(options: HarnessOptions = {}): Promise<this> {
-    this.httpServer = createServer();
+    const app = express();
+    app.use(express.json());
+    this.httpServer = createServer(app);
     this.io = new Server(this.httpServer, { path: "/socket.io" });
     this.handle = registerSocketHandlers(this.io, {
       joinRoom: new JoinRoom(this.rooms),
@@ -65,9 +70,20 @@ export class SocketHarness {
       kickPlayer: new KickPlayer(this.rooms),
       reapRooms: new ReapRooms(this.rooms),
       disconnectGraceMs: options.disconnectGraceMs ?? 50,
+      pagehideGraceMs: options.pagehideGraceMs,
       reaping: options.reaping,
       ...options.extend?.(this.rooms),
     });
+    const handle = this.handle;
+    app.use(
+      buildRouter({
+        createRoom: this.createRoom,
+        rooms: this.rooms,
+        leaveRoom: (roomCode, playerId) => handle.leave(roomCode, playerId),
+        leaveAfterPagehide: (roomCode, playerId) => handle.leaveAfterPagehide(roomCode, playerId),
+      }),
+    );
+    app.use(errorHandler);
     await new Promise<void>((resolve) => this.httpServer.listen(0, resolve));
     this.url = `http://localhost:${(this.httpServer.address() as AddressInfo).port}`;
     return this;
@@ -77,6 +93,11 @@ export class SocketHarness {
     for (const socket of this.clients) socket.disconnect();
     this.handle?.close();
     await this.io.close();
+  }
+
+  /** Base URL of the HTTP routes, e.g. for POST /api/rooms/:code/leave. */
+  get baseUrl(): string {
+    return this.url;
   }
 
   async client(): Promise<ClientSocket> {

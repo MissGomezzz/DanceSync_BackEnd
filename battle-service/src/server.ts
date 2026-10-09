@@ -88,6 +88,7 @@ const socketHandlers = registerSocketHandlers(io, {
   finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
   reapRooms: new ReapRooms(rooms),
   disconnectGraceMs: env.disconnectGraceMs,
+  pagehideGraceMs: env.pagehideGraceMs,
   wordRace: {
     scheduler: wordRaceScheduler,
     submitWord: new SubmitWord(wordRaces),
@@ -103,6 +104,8 @@ app.use(
     createRoom,
     rooms,
     onRoomCreated: (room) => socketHandlers.watchNewRoom(room.code, room.hostId),
+    leaveRoom: (roomCode, playerId) => socketHandlers.leave(roomCode, playerId),
+    leaveAfterPagehide: (roomCode, playerId) => socketHandlers.leaveAfterPagehide(roomCode, playerId),
   }),
 );
 app.use(errorHandler);

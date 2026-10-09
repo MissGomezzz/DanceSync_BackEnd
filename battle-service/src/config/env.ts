@@ -40,6 +40,12 @@ export function loadEnv(source: Source = process.env) {
      * Covers page refreshes and transient network drops without closing the room.
      */
     disconnectGraceMs: read("DISCONNECT_GRACE_MS", 15_000, "non-negative"),
+    /**
+     * How long a seat is kept after a "pagehide" leave beacon (POST
+     * /api/rooms/:code/leave). Browsers send it on a reload too, so the seat is
+     * released only if the player has not rejoined by then.
+     */
+    pagehideGraceMs: read("PAGEHIDE_GRACE_MS", 3_000, "non-negative"),
     /** Time players have to type the phrase that grants the right to choose the song. */
     songChallengeMs: read("SONG_CHALLENGE_MS", 15_000, "positive"),
     /** Time the chooser has to pick a song before the server picks one at random. */

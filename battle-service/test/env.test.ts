@@ -12,6 +12,7 @@ describe("Configuration", () => {
     assert.equal(env.wordBonusPoints, 1);
     assert.equal(env.votePoints, 2);
     assert.equal(env.disconnectGraceMs, 15_000);
+    assert.equal(env.pagehideGraceMs, 3_000);
     assert.equal("ratingGraceMs" in env, false, "the rating grace period is gone");
   });
 
@@ -40,6 +41,8 @@ describe("Configuration", () => {
       { VOTE_POINTS: "-2" },
       { VOTE_POINTS: "2.5" },
       { VOTE_POINTS: "two" },
+      { PAGEHIDE_GRACE_MS: "-1" },
+      { PAGEHIDE_GRACE_MS: "soon" },
       { WORD_RACE_ROUNDS: "2.5" },
       { WORD_RACE_WINDOW_MS: "Infinity" },
       { PORT: "http" },

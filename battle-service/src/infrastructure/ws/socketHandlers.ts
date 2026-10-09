@@ -56,6 +56,12 @@ export interface SocketDependencies {
   reapRooms: ReapRooms;
   /** Seat retention after a disconnect, see env.disconnectGraceMs. */
   disconnectGraceMs: number;
+  /**
+   * Seat retention after a "pagehide" leave beacon (see env.pagehideGraceMs):
+   * long enough for a reloading page to rejoin, short enough that a closed tab
+   * frees its seat quickly. Default 3 s.
+   */
+  pagehideGraceMs?: number;
   /** Abandoned-room housekeeping timings; defaults suit production. */
   reaping?: ReapingOptions;
   /** Mid-battle word race. Optional so harnesses that do not exercise it can omit it. */
@@ -81,6 +87,7 @@ export interface ReapingOptions {
 }
 
 const CREATED_ROOM_MARGIN_MS = 5_000;
+const DEFAULT_PAGEHIDE_GRACE_MS = 3_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
 
 /** Lets the owner stop every timer the handlers own (tests, graceful shutdown). */
@@ -94,6 +101,19 @@ export interface SocketHandlersHandle {
   watchNewRoom(roomCode: string, hostId: string): void;
   /** One pass of the periodic sweep (also run every sweepIntervalMs). */
   sweep(): Promise<void>;
+  /**
+   * The player leaves the room through the same path as room:leave (seat
+   * released, host handed over, battle settled, every socket of the player
+   * unbound, broadcasts). Used by POST /api/rooms/:code/leave.
+   */
+  leave(roomCode: string, playerId: string): Promise<LeaveRoomOutput>;
+  /**
+   * The player's page sent a leave beacon on `pagehide`, which browsers fire on
+   * a reload as well as on a tab close. The seat is released after
+   * pagehideGraceMs unless a socket of the player is bound to the room by then
+   * (a reload rejoins), exactly like the disconnect grace but shorter.
+   */
+  leaveAfterPagehide(roomCode: string, playerId: string): void;
   /** Deadline timers per room (song challenge, ...), exposed so tests can prove nothing leaks. */
   readonly roomTimers: RoomTimers;
 }
@@ -105,6 +125,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    * never release a seat that a later reconnect renewed.
    */
   const graceTimers = new Map<string, NodeJS.Timeout>();
+  /** When each pending grace timer fires (epoch ms), so a later, longer grace never postpones it. */
+  const graceDeadlines = new Map<string, number>();
   const roomTimers = new RoomTimers();
   /**
    * Version of the room state the timers were last armed from. Two handlers can
@@ -224,7 +246,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   }
 
   /**
-   * Broadcasts the outcome of a departure (room:leave or a seat released after the disconnect grace period). The departure may have
+   * Broadcasts the outcome of a departure (room:leave, the HTTP leave endpoint or
+   * a seat released after the disconnect grace period). The departure may have
    * finished the battle, which is announced like any other finish.
    */
   async function announceLeave(roomCode: string, { room, battleFinished, discardedVoterIds }: LeaveRoomOutput): Promise<void> {
@@ -253,18 +276,31 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     const key = seatKey(roomCode, playerId);
     clearTimeout(graceTimers.get(key));
     graceTimers.delete(key);
+    graceDeadlines.delete(key);
   }
 
-  function scheduleGrace(roomCode: string, playerId: string): void {
-    cancelGrace(roomCode, playerId);
+  /**
+   * Releases the seat after `delayMs` unless the player is bound to the room
+   * again by then (a rejoin cancels the timer). One timer per seat: a new grace
+   * replaces the pending one, except that it never postpones it. A tab close
+   * sends the pagehide beacon (3 s) and then drops its socket (15 s); the seat
+   * must still be released after 3 s.
+   */
+  function scheduleGrace(roomCode: string, playerId: string, delayMs: number = deps.disconnectGraceMs): void {
     const key = seatKey(roomCode, playerId);
+    const deadline = Date.now() + delayMs;
+    const pending = graceDeadlines.get(key);
+    if (graceTimers.has(key) && pending !== undefined && pending <= deadline) return;
+    cancelGrace(roomCode, playerId);
     if (!unboundSince.has(key)) unboundSince.set(key, Date.now());
     const timer = setTimeout(() => {
       graceTimers.delete(key);
+      graceDeadlines.delete(key);
       void releaseSeatIfAbandoned(roomCode, playerId);
-    }, deps.disconnectGraceMs);
+    }, delayMs);
     timer.unref();
     graceTimers.set(key, timer);
+    graceDeadlines.set(key, deadline);
   }
 
   /**
@@ -588,9 +624,14 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     roomTimers,
     watchNewRoom,
     sweep,
+    leave: leaveRoom,
+    leaveAfterPagehide(roomCode, playerId) {
+      scheduleGrace(roomCode, playerId, deps.pagehideGraceMs ?? DEFAULT_PAGEHIDE_GRACE_MS);
+    },
     close() {
       for (const timer of graceTimers.values()) clearTimeout(timer);
       graceTimers.clear();
+      graceDeadlines.clear();
       for (const timer of newRoomTimers.values()) clearTimeout(timer);
       newRoomTimers.clear();
       clearInterval(sweepTimer);
