@@ -70,6 +70,8 @@ type SigningKey = Awaited<ReturnType<typeof generateKeyPair>>["privateKey"];
 
 export interface EntraTokenOptions {
   oid?: string;
+  /** Tenant that issues the token: sets `tid` and, unless `issuer` is given, the issuer. */
+  tenantId?: string;
   name?: string;
   audience?: string;
   issuer?: string;
@@ -114,6 +116,14 @@ export class FakeEntra {
   }
 
   /** The real verifier, trusting this tenant and the test guest secret. */
+  /** The real verifier of a multi-tenant application: any tenant, personal accounts only if allowed. */
+  multiTenantVerifier(allowPersonalAccounts: boolean): JwtTokenVerifier {
+    return new JwtTokenVerifier({
+      entra: { allowPersonalAccounts, audiences: [TEST_CLIENT_ID], keys: entraRemoteKeys(this.jwksUri) },
+      guest: { secret: TEST_GUEST_SECRET },
+    });
+  }
+
   verifier(): JwtTokenVerifier {
     return new JwtTokenVerifier({
       entra: { issuer: TEST_ISSUER, audiences: [TEST_CLIENT_ID], keys: entraRemoteKeys(this.jwksUri) },
@@ -127,9 +137,10 @@ export class FakeEntra {
 
   /** An access token as Entra ID v2.0 issues it for the API. */
   token(options: EntraTokenOptions = {}): Promise<string> {
-    const { oid = "user-ana", name = "Ana", audience = TEST_CLIENT_ID, issuer = TEST_ISSUER, expiresInSeconds = 3600 } = options;
+    const { oid = "user-ana", name = "Ana", audience = TEST_CLIENT_ID, tenantId = TEST_TENANT_ID, expiresInSeconds = 3600 } = options;
+    const issuer = options.issuer ?? `https://login.microsoftonline.com/${tenantId}/v2.0`;
     const now = Math.floor(Date.now() / 1000);
-    return new SignJWT({ oid, name, tid: TEST_TENANT_ID, scp: "access_as_user", ver: "2.0" })
+    return new SignJWT({ oid, name, tid: tenantId, scp: "access_as_user", ver: "2.0" })
       .setProtectedHeader({ alg: "RS256", typ: "JWT", kid: this.keyId })
       .setIssuer(issuer)
       .setAudience(audience)

@@ -57,7 +57,7 @@ Hay dos tipos de token. Cada servicio elige con qué llaves validarlo según el 
 
 | | Usuario registrado | Invitado |
 |---|---|---|
-| Emisor | Microsoft Entra ID (`https://login.microsoftonline.com/{tenant}/v2.0`) | `battle-service` (`dancesync-battle-service`) |
+| Emisor | Microsoft Entra ID (`https://login.microsoftonline.com/{tenant}/v2.0`), de cualquier organización o cuenta personal (ver [Quién puede iniciar sesión](#quién-puede-iniciar-sesión)) | `battle-service` (`dancesync-battle-service`) |
 | Firma | RS256, llaves públicas del tenant (JWKS) | HS256, secreto compartido `GUEST_TOKEN_SECRET` |
 | Audiencia | El client id de la aplicación | `dancesync-guest` |
 | Identidad | Reclamo `oid` | Reclamo `sub`, generado por el servidor (`guest-<uuid>`) |
@@ -72,6 +72,20 @@ Respuestas ante un intento no autorizado:
 | Token de invitado válido usado fuera de su alcance | `403` | El handshake se acepta; `room:join` a otra sala responde `FORBIDDEN` y el socket no queda asociado a ninguna sala |
 
 Se distingue 401 de 403 a propósito: 401 significa "no sé quién eres", 403 significa "sé quién eres y no puedes hacer esto".
+
+### Quién puede iniciar sesión
+
+`AZURE_TENANT_ID` (backend) y `VITE_AZURE_TENANT_ID` (frontend) llevan el mismo valor y deciden quién entra con Microsoft:
+
+| Valor | Quién puede iniciar sesión |
+|---|---|
+| `common` (el recomendado) | Cualquier cuenta de cualquier organización y cuentas personales de Microsoft (Outlook, Hotmail). Nadie tiene que invitar a nadie |
+| `organizations` | Cualquier cuenta de cualquier organización, sin cuentas personales |
+| Un tenant id | Solo los usuarios de ese tenant, o los invitados a él |
+
+Aceptar cualquier tenant no relaja la validación. La firma, el vencimiento y la audiencia se revisan igual, y además el emisor tiene que ser uno de Entra ID v2.0 (`https://login.microsoftonline.com/{tenant}/v2.0`) y nombrar el mismo tenant que el reclamo `tid` del token. Un emisor inventado o incoherente se rechaza con `wrong_issuer`. Las llaves se toman del endpoint común de Entra ID, el mismo para todos los tenants.
+
+Una salvedad que no depende del código: la aplicación no tiene editor verificado. Por eso, las organizaciones que solo permiten que sus usuarios den consentimiento a aplicaciones verificadas exigirán que un administrador de esa organización lo apruebe. Las cuentas personales y las organizaciones con la política por defecto anterior no tienen ese problema. Para eliminarlo del todo, hay que verificar el editor (requiere una cuenta de Microsoft Partner Network).
 
 ### Rutas del gateway
 
@@ -150,11 +164,11 @@ Se eliminó el formulario de usuario y contraseña simulado.
 
 | Variable | Dónde | Descripción |
 |---|---|---|
-| `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` | `api-gateway`, `battle-service` | Tenant y aplicación de Entra ID. Vacías: se rechaza todo token de usuario |
+| `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` | `api-gateway`, `battle-service` | Tenant (`common`, `organizations` o un tenant id) y aplicación de Entra ID. Vacías: se rechaza todo token de usuario |
 | `AZURE_API_AUDIENCE` | `api-gateway`, `battle-service` | Opcional. Audiencias aceptadas, separadas por coma. Por defecto el client id |
 | `GUEST_TOKEN_SECRET` | `api-gateway`, `battle-service` | Secreto de al menos 32 bytes, **el mismo en ambos**. Generarlo con `openssl rand -base64 48` |
 | `GUEST_TOKEN_TTL_SECONDS` | `battle-service` | Vigencia del token de invitado. Por defecto `7200` |
-| `VITE_AZURE_CLIENT_ID`, `VITE_AZURE_TENANT_ID` | Frontend | Ya existían. Vacías: el botón de Microsoft queda deshabilitado |
+| `VITE_AZURE_CLIENT_ID`, `VITE_AZURE_TENANT_ID` | Frontend | Ya existían. `VITE_AZURE_TENANT_ID` con el mismo valor que `AZURE_TENANT_ID`. Vacías: el botón de Microsoft queda deshabilitado |
 | `VITE_AZURE_API_SCOPE` | Frontend | Opcional. Por defecto `api://<client id>/access_as_user` |
 
 Los tres `.env.example` quedaron actualizados.
@@ -163,11 +177,11 @@ Los tres `.env.example` quedaron actualizados.
 
 Este paso lo hace quien administre el tenant; no se pudo hacer desde el código.
 
-1. Entra ID → *App registrations* → *New registration*. Cuentas: solo las de la organización.
-2. *Authentication* → agregar plataforma *Single-page application* con las URI de redirección del frontend (`http://localhost:5173` y la de producción).
+1. Entra ID → *App registrations* → *New registration*. *Supported account types*: **cuentas de cualquier directorio organizativo y cuentas personales de Microsoft** (`AzureADandPersonalMicrosoftAccount`). Con esto entra cualquiera sin invitación.
+2. *Authentication* → agregar plataforma *Single-page application* (no *Web*: MSAL canjea el código desde el navegador con PKCE) con las URI de redirección del frontend: `https://dancesyncfrontend.vercel.app` y `http://localhost:5173`.
 3. *Expose an API* → definir el *Application ID URI* (`api://<client id>`) y agregar el scope `access_as_user`.
 4. *Manifest* → poner `"accessTokenAcceptedVersion": 2` (en algunas versiones del portal, `api.requestedAccessTokenVersion`). Con esto el token trae el emisor `.../v2.0` y la audiencia igual al client id, que es lo que validan los servicios.
-5. Copiar *Application (client) ID* y *Directory (tenant) ID* a las variables de los tres componentes.
+5. Copiar el *Application (client) ID* a `AZURE_CLIENT_ID` y `VITE_AZURE_CLIENT_ID`, y poner `common` en `AZURE_TENANT_ID` y `VITE_AZURE_TENANT_ID`.
 
 ## 6. Verificación y evidencia
 
@@ -191,8 +205,8 @@ Las pruebas usan la validación real. Lo único simulado es Entra ID: un par de 
 | Suite | Comando | Resultado |
 |---|---|---|
 | `battle-service`, SEG-1 | `pnpm exec tsx --test test/seg1.*.test.ts` | 27 pruebas, 27 pasan |
-| `battle-service`, completa | `pnpm test` | 249 pruebas, 249 pasan (antes 219) |
-| `api-gateway`, completa | `./mvnw -B test` | 26 pruebas, 26 pasan (antes 5); 20 son de `Seg1SecurityTests` |
+| `battle-service`, completa | `pnpm test` | 255 pruebas, 255 pasan (antes 219); incluye `seg1.multitenant.test.ts` |
+| `api-gateway`, completa | `./mvnw -B test` | 30 pruebas, 30 pasan (antes 5); 20 de `Seg1SecurityTests` y 4 de `Seg1MultiTenantTests` |
 | Frontend, completa | `pnpm test` | 186 pruebas, 186 pasan (antes 154) |
 | Extremo a extremo | `pnpm seg1:e2e` | 29 comprobaciones, 29 pasan |
 

@@ -84,6 +84,13 @@ public final class FakeEntra {
     }
 
     /** Issued two hours ago for one hour: a genuine token that is simply too old. */
+    /** A valid token issued by another tenant (another organization). */
+    public String userTokenOfTenant(String oid, String tenantId) {
+        return userToken(oid, claims -> claims
+                .issuer("https://login.microsoftonline.com/" + tenantId + "/v2.0")
+                .claim("tid", tenantId));
+    }
+
     public String expiredUserToken(String oid) {
         return userToken(oid, FakeEntra::expireAnHourAgo);
     }

@@ -85,6 +85,7 @@ describe("Authentication configuration (SEG-1)", () => {
     const { auth } = loadEnv({ AZURE_TENANT_ID: " tenant-1 ", AZURE_CLIENT_ID: "client-1" });
     assert.deepEqual(auth.entra, {
       issuer: "https://login.microsoftonline.com/tenant-1/v2.0",
+      allowPersonalAccounts: false,
       jwksUri: "https://login.microsoftonline.com/tenant-1/discovery/v2.0/keys",
       audiences: ["client-1"],
     });
@@ -92,6 +93,18 @@ describe("Authentication configuration (SEG-1)", () => {
     assert.deepEqual(custom.auth.entra?.audiences, ["client-1", "api://client-1"]);
     // A tenant without an audience cannot validate anything: still not configured.
     assert.equal(loadEnv({ AZURE_TENANT_ID: "tenant-1" }).auth.entra, null);
+  });
+
+  it('"common" accepts any tenant and personal accounts, "organizations" any tenant only', () => {
+    assert.deepEqual(loadEnv({ AZURE_TENANT_ID: "common", AZURE_CLIENT_ID: "client-1" }).auth.entra, {
+      issuer: null,
+      allowPersonalAccounts: true,
+      jwksUri: "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+      audiences: ["client-1"],
+    });
+    const organizations = loadEnv({ AZURE_TENANT_ID: "Organizations", AZURE_CLIENT_ID: "client-1" }).auth.entra;
+    assert.equal(organizations?.issuer, null);
+    assert.equal(organizations?.allowPersonalAccounts, false);
   });
 
   it("reads the guest secret and lifetime, and refuses a secret shorter than 32 bytes", () => {

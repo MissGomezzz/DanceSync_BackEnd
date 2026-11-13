@@ -65,7 +65,8 @@ const tokenVerifier = new JwtTokenVerifier({
   ...(env.auth.entra
     ? {
         entra: {
-          issuer: env.auth.entra.issuer,
+          ...(env.auth.entra.issuer ? { issuer: env.auth.entra.issuer } : {}),
+          allowPersonalAccounts: env.auth.entra.allowPersonalAccounts,
           audiences: [...env.auth.entra.audiences],
           keys: entraRemoteKeys(env.auth.entra.jwksUri),
         },
