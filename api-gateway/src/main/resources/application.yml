@@ -64,6 +64,26 @@ spring:
               filters:
                 - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Vary, RETAIN_UNIQUE
 
+# SEG-1, authentication. Registered users present an access token issued by
+# Microsoft Entra ID; guests present a token signed by battle-service with
+# GUEST_TOKEN_SECRET (the same value in both services). Whatever is left empty
+# fails closed: those tokens are refused, never accepted unchecked.
+dancesync:
+  auth:
+    entra:
+      tenant-id: ${AZURE_TENANT_ID:}
+      # Application (client) id of the API registration: the expected audience.
+      client-id: ${AZURE_CLIENT_ID:}
+      # Optional, comma separated; defaults to the client id.
+      audiences: ${AZURE_API_AUDIENCE:}
+      # Optional overrides; derived from the tenant id by default.
+      issuer-uri: ${ENTRA_ISSUER_URI:}
+      jwk-set-uri: ${ENTRA_JWKS_URI:}
+    guest:
+      secret: ${GUEST_TOKEN_SECRET:}
+    cors:
+      allowed-origin: ${FRONTEND_ORIGIN:http://localhost:5173}
+
 management:
   endpoints:
     web:

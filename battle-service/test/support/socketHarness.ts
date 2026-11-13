@@ -9,7 +9,12 @@ import { ChooseSong } from "../../src/application/usecases/ChooseSong.js";
 import { FinishBattleAtDeadline } from "../../src/application/usecases/FinishBattleAtDeadline.js";
 import { KickPlayer } from "../../src/application/usecases/KickPlayer.js";
 import { ReapRooms } from "../../src/application/usecases/ReapRooms.js";
+import type { GuestTokenIssuer, TokenVerifier } from "../../src/application/auth/AuthIdentity.js";
 import { CreateRoom } from "../../src/application/usecases/CreateRoom.js";
+import { IssueGuestToken } from "../../src/application/usecases/IssueGuestToken.js";
+import type { AuthAuditLog } from "../../src/infrastructure/auth/authAudit.js";
+import { createHandshakeAuth } from "../../src/infrastructure/ws/handshakeAuth.js";
+import { silentAudit, stubTokenVerifier, trustClaimedPlayerId } from "./auth.js";
 import { JoinRoom } from "../../src/application/usecases/JoinRoom.js";
 import { CastVote } from "../../src/application/usecases/CastVote.js";
 import { StartRematch } from "../../src/application/usecases/StartRematch.js";
@@ -31,7 +36,21 @@ import {
 
 export type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 
+/** Real token validation, as in production (SEG-1 suites). */
+export interface HarnessAuth {
+  verifier: TokenVerifier;
+  audit?: AuthAuditLog;
+  /** Enables POST /api/rooms/:code/guest-token. */
+  guestIssuer?: GuestTokenIssuer;
+}
+
 export interface HarnessOptions {
+  /**
+   * Validates handshakes and HTTP requests with this verifier. Omitted (suites
+   * that are not about authentication): sockets act as the player they name in
+   * room:join and HTTP accepts the stub tokens of support/auth.ts.
+   */
+  auth?: HarnessAuth;
   disconnectGraceMs?: number;
   pagehideGraceMs?: number;
   reaping?: ReapingOptions;
@@ -55,7 +74,12 @@ export class SocketHarness {
     app.use(express.json());
     this.httpServer = createServer(app);
     this.io = new Server(this.httpServer, { path: "/socket.io" });
+    const audit = options.auth?.audit ?? silentAudit;
     this.handle = registerSocketHandlers(this.io, {
+      authenticateHandshake: options.auth
+        ? createHandshakeAuth({ verifier: options.auth.verifier, audit })
+        : trustClaimedPlayerId,
+      authAudit: audit,
       joinRoom: new JoinRoom(this.rooms),
       startBattle: new StartBattle(this.rooms),
       selectRole: new SelectRole(this.rooms),
@@ -77,6 +101,10 @@ export class SocketHarness {
     const handle = this.handle;
     app.use(
       buildRouter({
+        auth: { verifier: options.auth?.verifier ?? stubTokenVerifier, audit },
+        ...(options.auth?.guestIssuer
+          ? { issueGuestToken: new IssueGuestToken(this.rooms, options.auth.guestIssuer) }
+          : {}),
         createRoom: this.createRoom,
         rooms: this.rooms,
         leaveRoom: (roomCode, playerId) => handle.leave(roomCode, playerId),
@@ -100,10 +128,39 @@ export class SocketHarness {
     return this.url;
   }
 
-  async client(): Promise<ClientSocket> {
-    const socket = connect(this.url, { path: "/socket.io", transports: ["websocket"], forceNew: true });
+  /** A connected client; `token` travels in the handshake like the frontend sends it. */
+  async client(token?: string): Promise<ClientSocket> {
+    const socket = this.open(token === undefined ? undefined : { token });
+    await new Promise<void>((resolve, reject) => {
+      socket.on("connect", () => resolve());
+      socket.on("connect_error", (error) => reject(new Error(`The handshake was refused: ${error.message}`)));
+    });
+    return socket;
+  }
+
+  /** Opens a connection that must be refused and resolves with the client's connect_error. */
+  async refusedClient(
+    auth?: Record<string, unknown>,
+    extraHeaders?: Record<string, string>,
+  ): Promise<{ error: Error & { data?: unknown }; socket: ClientSocket }> {
+    const socket = this.open(auth, extraHeaders);
+    const error = await new Promise<Error & { data?: unknown }>((resolve, reject) => {
+      socket.on("connect_error", (refusal) => resolve(refusal));
+      socket.on("connect", () => reject(new Error("The handshake should have been refused")));
+    });
+    return { error, socket };
+  }
+
+  private open(auth?: Record<string, unknown>, extraHeaders?: Record<string, string>): ClientSocket {
+    const socket = connect(this.url, {
+      path: "/socket.io",
+      transports: ["websocket"],
+      forceNew: true,
+      reconnection: false,
+      ...(auth ? { auth } : {}),
+      ...(extraHeaders ? { extraHeaders } : {}),
+    });
     this.clients.push(socket);
-    await new Promise<void>((resolve) => socket.on("connect", () => resolve()));
     return socket;
   }
 

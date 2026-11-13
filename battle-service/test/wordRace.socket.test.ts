@@ -32,6 +32,7 @@ import type { WordRoundEndedPayload, WordRoundStartedPayload } from "../src/infr
 import { registerSocketHandlers, type BattleServer, type SocketHandlersHandle } from "../src/infrastructure/ws/socketHandlers.js";
 import { createSocketWordRaceBroadcaster } from "../src/infrastructure/ws/wordRaceMessages.js";
 import { pickSong, readyUp } from "./support/ready.js";
+import { trustClaimedPlayerId } from "./support/auth.js";
 import type { RoomDto } from "../src/infrastructure/serialization/roomDto.js";
 import { AwardWordBonus } from "../src/application/usecases/AwardWordBonus.js";
 
@@ -129,6 +130,7 @@ before(async () => {
     broadcaster: createSocketWordRaceBroadcaster(io),
   });
   handlers = registerSocketHandlers(io, {
+    authenticateHandshake: trustClaimedPlayerId,
     joinRoom: new JoinRoom(rooms),
     startBattle: new StartBattle(rooms),
     selectRole: new SelectRole(rooms),

@@ -40,7 +40,7 @@ describe("POST /api/rooms/:code/leave (HU 22)", () => {
     const guestUpdates = record<RoomDto>(sockets.guest, "room:updated");
     const hostUpdates = record<RoomDto>(sockets.host, "room:updated");
 
-    const response = await leave(code.toLowerCase(), JSON.stringify({ playerId: "host" }));
+    const response = await leave(code.toLowerCase(), JSON.stringify({ token: "user:host" }));
     assert.equal(response.status, 204);
 
     const stored = await harness.storedRoom(code);
@@ -57,7 +57,7 @@ describe("POST /api/rooms/:code/leave (HU 22)", () => {
 
   it("accepts the text/plain body navigator.sendBeacon sends", async () => {
     const { code } = await room();
-    const response = await leave(code, JSON.stringify({ playerId: "fan" }), "text/plain;charset=UTF-8");
+    const response = await leave(code, JSON.stringify({ token: "user:fan" }), "text/plain;charset=UTF-8");
     assert.equal(response.status, 204);
     assert.deepEqual((await harness.storedRoom(code)).players.map((p) => p.id), ["host", "guest"]);
   });
@@ -70,7 +70,7 @@ describe("POST /api/rooms/:code/leave (HU 22)", () => {
     await ok(sockets.host, "battle:start", { roomCode: code, requesterId: "host" });
     await ok(sockets.fan, "vote:cast", { roomCode: code, voterId: "fan", dancerId: "guest" });
 
-    const response = await leave(code, JSON.stringify({ playerId: "host" }), "text/plain");
+    const response = await leave(code, JSON.stringify({ token: "user:host" }), "text/plain");
     assert.equal(response.status, 204);
     await waitUntil(() => finished.length === 1, "battle:finished after the HTTP leave");
     assert.equal(finished[0].battle!.endReason, "not-enough-dancers");
@@ -78,18 +78,20 @@ describe("POST /api/rooms/:code/leave (HU 22)", () => {
     assert.equal(harness.roomTimers().pending(code), 0, "a battle timer leaked");
   });
 
-  it("validates the request: 400 for a bad body or player id, 404 for an unknown room, 403 for a non-member", async () => {
+  it("validates the request: 400 for a bad body, 401 without a valid token, 404 for an unknown room, 403 for a non-member", async () => {
     const { code } = await room();
     const cases: [string, string, string, number][] = [
       [code, "{not json", "text/plain", 400],
       [code, "{not json", "application/json", 400],
-      [code, JSON.stringify({}), "application/json", 400],
-      [code, JSON.stringify({ playerId: 5 }), "text/plain", 400],
-      [code, JSON.stringify({ playerId: " host" }), "application/json", 400],
-      [code, JSON.stringify({ playerId: "x".repeat(65) }), "application/json", 400],
-      [code, "", "application/octet-stream", 400],
-      ["NOROOM", JSON.stringify({ playerId: "host" }), "application/json", 404],
-      [code, JSON.stringify({ playerId: "stranger" }), "application/json", 403],
+      [code, JSON.stringify({ token: 5 }), "text/plain", 400],
+      [code, JSON.stringify({}), "application/json", 401],
+      // The player is the one in the token: naming another one in the body changes nothing.
+      [code, JSON.stringify({ playerId: "host" }), "application/json", 401],
+      [code, JSON.stringify({ token: "not-a-token" }), "application/json", 401],
+      [code, "", "application/octet-stream", 401],
+      [code, JSON.stringify({ token: "guest:fan:OTHER1" }), "application/json", 403],
+      ["NOROOM", JSON.stringify({ token: "user:host" }), "application/json", 404],
+      [code, JSON.stringify({ token: "user:stranger" }), "application/json", 403],
     ];
     for (const [roomCode, body, type, status] of cases) {
       const response = await leave(roomCode, body, type);
@@ -101,9 +103,9 @@ describe("POST /api/rooms/:code/leave (HU 22)", () => {
 
   it("the last player leaving over HTTP deletes the room", async () => {
     const { code } = await harness.createRoom.execute({ hostId: "solo", displayName: "Solo" });
-    assert.equal((await leave(code, JSON.stringify({ playerId: "solo" }))).status, 204);
+    assert.equal((await leave(code, JSON.stringify({ token: "user:solo" }))).status, 204);
     assert.equal(await harness.rooms.findByCode(code), undefined);
-    assert.equal((await leave(code, JSON.stringify({ playerId: "solo" }))).status, 404);
+    assert.equal((await leave(code, JSON.stringify({ token: "user:solo" }))).status, 404);
   });
 });
 
@@ -119,7 +121,7 @@ describe('POST /api/rooms/:code/leave with reason "pagehide" (beacon on reload o
     return fetch(`${beacons.baseUrl}/api/rooms/${code}/leave`, {
       method: "POST",
       headers: { "content-type": "text/plain;charset=UTF-8" },
-      body: JSON.stringify({ playerId, reason }),
+      body: JSON.stringify({ token: `user:${playerId}`, reason }),
     });
   }
 

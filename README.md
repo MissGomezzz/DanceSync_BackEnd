@@ -119,6 +119,10 @@ Defaults live in `.env.example`; every service falls back to the same values whe
 | `USERS_SERVICE_URL` | `http://localhost:8081` | api-gateway, battle-service |
 | `BATTLE_SERVICE_URL` | `http://localhost:3000` | api-gateway (HTTP and Socket.IO routes; the gateway upgrades to WebSocket automatically) |
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | api-gateway (CORS) |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` | empty | api-gateway, battle-service (Microsoft Entra ID tenant and application whose access tokens are accepted; empty = every registered-user token is refused) |
+| `AZURE_API_AUDIENCE` | `AZURE_CLIENT_ID` | api-gateway, battle-service (accepted `aud` values, comma separated) |
+| `GUEST_TOKEN_SECRET` | empty | api-gateway, battle-service (secret that signs the guest tokens, at least 32 bytes, the same in both; empty = guest tokens are neither issued nor accepted) |
+| `GUEST_TOKEN_TTL_SECONDS` | `7200` | battle-service (positive whole number; lifetime of a guest token) |
 | `PORT` | `3000` | battle-service (whole number, `0` or more) |
 | `CORS_ORIGIN` | `http://localhost:5173` | battle-service |
 | `DISCONNECT_GRACE_MS` | `15000` | battle-service (`0` or more; how long a disconnected player keeps their seat; rooms created over HTTP wait this plus 5 s for their host) |
@@ -182,12 +186,15 @@ Through the gateway only `GET /api/matches` and `GET /api/matches/**` are expose
 HTTP:
 
 - `GET /api/battles/health`
-- `POST /api/rooms` (`hostId`, `displayName`) - create a room; returns `201` with the room. If the host never connects a socket to it within `DISCONNECT_GRACE_MS` + 5 s, the room is deleted.
-- `GET /api/rooms/:code`
-- `POST /api/rooms/:code/leave` (`{ playerId, reason?: "explicit" | "pagehide" }`) - HU 22. The body is accepted as `application/json` **or** as JSON text in a `text/plain` body, which is what `navigator.sendBeacon` can send without a CORS preflight.
+Every route below except the health check and the guest token needs `Authorization: Bearer <token>` (see [Authentication](#authentication-seg-1)); without a valid one the answer is `401`, and `403` when a guest token is used outside its room or for a registered-only action.
+
+- `POST /api/rooms` (`displayName`) - registered users only. Creates a room hosted by the user in the token (a `hostId` in the body is ignored); returns `201` with the room. If the host never connects a socket to it within `DISCONNECT_GRACE_MS` + 5 s, the room is deleted.
+- `POST /api/rooms/:code/guest-token` (`displayName`) - public. For someone without an account who has the code of an existing room: returns `201 { token, playerId, displayName, roomCode, expiresAt }`, a token valid only for that room for `GUEST_TOKEN_TTL_SECONDS`. `404` for an unknown room, `400` for an invalid display name, `503` when `GUEST_TOKEN_SECRET` is not set.
+- `GET /api/rooms/:code` - registered users, or the guest of that room.
+- `POST /api/rooms/:code/leave` (`{ reason?: "explicit" | "pagehide", token? }`) - HU 22. The player who leaves is the one in the token, sent in the `Authorization` header or, by the beacon (which cannot set headers), in the body. The body is accepted as `application/json` **or** as JSON text in a `text/plain` body, which is what `navigator.sendBeacon` can send without a CORS preflight.
   - `reason: "explicit"` (default): the player leaves at once through the same flow as `room:leave` (seat released, host handed over, battle settled, every socket of the player unbound, `room:updated` / `battle:finished` broadcast); `204`.
   - `reason: "pagehide"`: the beacon a page sends when it is hidden. Browsers fire `pagehide` on a reload as well as on a tab close, so the seat is **not** released at once: the per-seat grace timer is armed with `PAGEHIDE_GRACE_MS` (default 3 s) and, when it fires, the seat is released only if no socket of the player is bound to the room; a rejoin cancels it. `202`. A reload therefore keeps the seat, the host role and a running battle, while a closed tab frees them in seconds. A grace never postpones a shorter pending one, so the socket drop that follows the beacon does not stretch it back to `DISCONNECT_GRACE_MS`.
-  - `400` for a malformed body, player id or reason, `404` unknown room, `403` (`PLAYER_NOT_IN_ROOM`) when the player is not in it. Identity is the mocked guest id, like every other action until Entra ID (known limitation).
+  - `400` for a malformed body or reason, `401` without a valid token, `404` unknown room, `403` (`PLAYER_NOT_IN_ROOM`) when the player is not in it or (`FORBIDDEN`) for a guest token of another room.
 - A malformed JSON body answers `400 { "error": "Malformed JSON body" }`; domain errors answer `{ error, code }` with the status in the table below.
 
 Socket.IO (path `/socket.io`):
@@ -258,7 +265,7 @@ Socket.IO (path `/socket.io`):
 
 `INVALID_VOTER` is a vote from a dancer or from someone who is not a spectator of the battle; `BATTLE_NOT_STARTED` a vote during the start countdown; `BATTLE_FINISHED` a vote once the song ended; `INVALID_DANCER` a vote for someone not dancing (or no longer dancing) in the battle; `INVALID_MESSAGE` a `dancerId` that is neither text nor `null`. `room:rematch` answers `NOT_HOST` (not the host) and `ROOM_NOT_FINISHED` (the battle is still running, or there is none). `INVALID_RATER`, `INVALID_SCORE` and `DUPLICATE_RATING` were removed with the ratings. `player:kick` answers `NOT_HOST` (not the host), `ROOM_NOT_WAITING` (battle running), `INVALID_PLAYER` (yourself or a malformed id) and `PLAYER_NOT_IN_ROOM` (unknown target).
 
-**Identity.** `room:join` binds the socket to `(roomCode, playerId)`. Every other client event must name that same room and player (`playerId`, `requesterId`, `senderId`, `voterId` or `from`); otherwise the ack returns `PLAYER_NOT_IN_ROOM` and nothing happens, so nobody can kick, start as the host, chat or vote as someone else. Authentication is mocked for now: once Azure Entra ID is wired, the identity bound on `room:join` will come from the validated token instead of the payload. Host-only actions sent by a non-host fail with `NOT_HOST`.
+**Identity.** The client sends its access token in the Socket.IO handshake (`io(url, { auth: { token } })`). battle-service validates it before accepting the connection; without a valid one the client gets `connect_error` with the message `UNAUTHORIZED` and is never bound to a room. The player is the one in the token: `room:join` binds the socket to `(roomCode, <token's player>)` and every other event acts as that player. The id fields of the payloads (`playerId`, `requesterId`, `senderId`, `voterId`, `from`) are optional and only cross-checked: an event naming someone else, or another room, is refused with `PLAYER_NOT_IN_ROOM` and nothing happens, so nobody can kick, start as the host, chat or vote as someone else. A guest token joining a room other than its own is refused with `FORBIDDEN`. Host-only actions sent by a non-host fail with `NOT_HOST`.
 
 Rooms hold at most 7 players. Display names are trimmed, 1-32 characters, and unique within a room: a name already used there (ignoring case) gets the first free suffix ` 2`, ` 3`, ... (shortened to stay within 32 characters); a player rejoining keeps their own name. In the lobby each player chooses `dancer` or `spectator` (`role:select`) and can mark themselves ready to dance, or cancel it, with `player:ready` (`{ roomCode, playerId, ready }`); every change is broadcast as `room:updated` (`players[].ready`) and is only accepted while the room is waiting. Starting a battle is a three-step flow: (1) once every player is ready (`PLAYERS_NOT_READY` otherwise) and at least 2 chose to dance, the host sends `song-challenge:start`; (2) the dancers race to type the phrase and the winner picks a song with `song:choose`; (3) choosing the song starts the battle by itself (`battle:started`). `battle:start` alone is only for a room whose song is already chosen and fails with `SONG_NOT_SELECTED` otherwise. Anyone still undecided spectates. Because every player must be ready, the host can remove an idle player from the lobby with `player:kick`: the player leaves through the normal departure rules, every tab of theirs receives `room:kicked` and is unbound (it can no longer act nor receive the room's events), and the room gets `room:updated`.
 
@@ -312,9 +319,19 @@ Run them with `pnpm test` (all tests) or, for example, `npx tsx --test test/room
 
 The `webrtc:*` events are a thin signaling relay for the dancers' live cameras (media flows peer to peer, never through the server). The server only checks that the sender joined that room as `playerId`/`from` and that `to` is connected to the same room; otherwise the ack returns `{ ok: false }` and nothing is relayed. Each socket also joins a `player:<playerId>` channel on `room:join` so signals can target a single player.
 
+## Authentication (SEG-1)
+
+Quality scenario SEG-1 is documented, with its tests and evidence, in [docs/quality/SEG-1-seguridad-autenticacion.md](docs/quality/SEG-1-seguridad-autenticacion.md). In short:
+
+- **Registered users** sign in with Microsoft Entra ID (the frontend uses MSAL) and send the access token. The `api-gateway` is an OAuth2 resource server (Spring Security): it checks signature, expiry, issuer and audience before routing, answers `401` otherwise and logs the attempt. `battle-service` validates the same token again and takes the player id from its `oid` claim.
+- **Guests** get a token from `POST /api/rooms/:code/guest-token`, signed by `battle-service` (HS256, `GUEST_TOKEN_SECRET`), short-lived and valid only for that room. It cannot create rooms or read the match history (`403`).
+- **Socket.IO**: the token travels in the handshake and `battle-service` validates it before accepting the connection (`UNAUTHORIZED` otherwise), because the gateway only proxies the connection.
+- **Audit trail**: every refusal is one JSON log line (`"event":"auth.rejected"`) with the reason and the `X-Correlation-Id` the gateway assigns and forwards. Tokens are never logged.
+- Nothing is skipped when the settings are missing: an unconfigured token kind is refused.
+
 ## Roadmap
 
-- **Authentication with Azure Entra ID**: validate JWTs at the `api-gateway` (`spring-boot-starter-oauth2-resource-server`), propagate identity downstream, and configure `users-service` and `battle-service` as resource servers. `users.external_id` is already reserved for the Entra ID object id. `TODO`: wire `spring-security` once the tenant and app registrations exist.
+- **Authentication, next steps**: `users-service` still trusts the network (it is only reachable through the gateway and from `battle-service`); making it a resource server and linking `users.external_id` to the Entra ID object id are future work.
 - **Payments**: dedicated payments service behind the gateway; provider to be decided.
 - **Match history UI**: the `GET /api/matches` endpoints exist (HU 21); a per-user history page is a future story.
 - **Horizontal scaling of battle-service**: replace `InMemoryRoomRepository` with Redis and enable the Socket.IO Redis adapter.
