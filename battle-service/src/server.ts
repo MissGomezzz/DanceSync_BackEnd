@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
 import { CreateRoom } from "./application/usecases/CreateRoom.js";
+import { IssueGuestToken } from "./application/usecases/IssueGuestToken.js";
 import { FinishBattleAtDeadline } from "./application/usecases/FinishBattleAtDeadline.js";
 import { JoinRoom } from "./application/usecases/JoinRoom.js";
 import { KickPlayer } from "./application/usecases/KickPlayer.js";
@@ -13,6 +14,9 @@ import { StartRematch } from "./application/usecases/StartRematch.js";
 import { SendChatMessage } from "./application/usecases/SendChatMessage.js";
 import { StartBattle } from "./application/usecases/StartBattle.js";
 import { env } from "./config/env.js";
+import { consoleAuthAudit } from "./infrastructure/auth/authAudit.js";
+import { entraRemoteKeys, JwtGuestTokenIssuer, JwtTokenVerifier } from "./infrastructure/auth/JwtTokenVerifier.js";
+import { createHandshakeAuth } from "./infrastructure/ws/handshakeAuth.js";
 import { HttpMatchResultPublisher } from "./infrastructure/http/HttpMatchResultPublisher.js";
 import { buildRouter, errorHandler } from "./infrastructure/http/routes.js";
 import { InMemoryRoomRepository } from "./infrastructure/persistence/InMemoryRoomRepository.js";
@@ -54,6 +58,29 @@ const startSongChallenge = new StartSongChallenge(rooms, {
 const submitSongPhrase = new SubmitSongPhrase(rooms);
 const chooseSong = new ChooseSong(rooms, battleTiming);
 
+// Authentication (SEG-1): Entra ID access tokens for registered users and
+// guest tokens signed here. Whatever is not configured is refused, never skipped.
+const guestSecret = env.auth.guest ? new TextEncoder().encode(env.auth.guest.secret) : null;
+const tokenVerifier = new JwtTokenVerifier({
+  ...(env.auth.entra
+    ? {
+        entra: {
+          issuer: env.auth.entra.issuer,
+          audiences: [...env.auth.entra.audiences],
+          keys: entraRemoteKeys(env.auth.entra.jwksUri),
+        },
+      }
+    : {}),
+  ...(guestSecret ? { guest: { secret: guestSecret } } : {}),
+});
+const authAudit = consoleAuthAudit;
+if (!env.auth.entra) {
+  console.warn("AZURE_TENANT_ID / AZURE_CLIENT_ID are not set: every registered-user token will be refused");
+}
+if (!env.auth.guest) {
+  console.warn("GUEST_TOKEN_SECRET is not set: guest tokens are neither issued nor accepted");
+}
+
 const app = express();
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
 app.use(express.json());
@@ -76,6 +103,8 @@ const wordRaceScheduler = new WordRaceScheduler({
   broadcaster: createSocketWordRaceBroadcaster(io),
 });
 const socketHandlers = registerSocketHandlers(io, {
+  authenticateHandshake: createHandshakeAuth({ verifier: tokenVerifier, audit: authAudit }),
+  authAudit,
   joinRoom,
   startBattle,
   selectRole,
@@ -105,6 +134,10 @@ const socketHandlers = registerSocketHandlers(io, {
 // if its host never connects, the room is reaped instead of living forever.
 app.use(
   buildRouter({
+    auth: { verifier: tokenVerifier, audit: authAudit },
+    ...(guestSecret && env.auth.guest
+      ? { issueGuestToken: new IssueGuestToken(rooms, new JwtGuestTokenIssuer(guestSecret, env.auth.guest.ttlSeconds)) }
+      : {}),
     createRoom,
     rooms,
     onRoomCreated: (room) => socketHandlers.watchNewRoom(room.code, room.hostId),

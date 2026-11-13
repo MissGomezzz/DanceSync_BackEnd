@@ -28,6 +28,45 @@ function readNumber(source: Source, name: string, fallback: number, rule: Number
   return parsed;
 }
 
+/** Smallest accepted GUEST_TOKEN_SECRET: 32 bytes, the size of the HS256 hash. */
+const MIN_GUEST_SECRET_LENGTH = 32;
+
+function readText(source: Source, name: string): string {
+  return source[name]?.trim() ?? "";
+}
+
+/**
+ * Authentication settings (SEG-1). Both token kinds fail closed: without the
+ * Entra ID settings every registered-user token is refused, and without the
+ * guest secret no guest token is issued or accepted. A secret that is too short
+ * is a configuration error and stops the process.
+ */
+function readAuth(source: Source, read: (name: string, fallback: number, rule: NumberRule) => number) {
+  const tenantId = readText(source, "AZURE_TENANT_ID");
+  const clientId = readText(source, "AZURE_CLIENT_ID");
+  const audiences = (readText(source, "AZURE_API_AUDIENCE") || clientId)
+    .split(",")
+    .map((audience) => audience.trim())
+    .filter((audience) => audience.length > 0);
+  const authority = tenantId ? `https://login.microsoftonline.com/${tenantId}` : "";
+  // Overridable so tests (and sovereign clouds) can point at another issuer and key set.
+  const issuer = readText(source, "ENTRA_ISSUER_URI") || (authority && `${authority}/v2.0`);
+  const jwksUri = readText(source, "ENTRA_JWKS_URI") || (authority && `${authority}/discovery/v2.0/keys`);
+  const secret = source.GUEST_TOKEN_SECRET ?? "";
+  if (secret.length > 0 && Buffer.byteLength(secret, "utf8") < MIN_GUEST_SECRET_LENGTH) {
+    throw new Error(`Environment variable GUEST_TOKEN_SECRET must be at least ${MIN_GUEST_SECRET_LENGTH} bytes long`);
+  }
+  return {
+    /** Null until AZURE_TENANT_ID and AZURE_CLIENT_ID are set. */
+    entra: issuer && jwksUri && audiences.length > 0 ? { issuer, jwksUri, audiences } : null,
+    /** Null until GUEST_TOKEN_SECRET is set (the same value as in the api-gateway). */
+    guest:
+      secret.length > 0
+        ? { secret, ttlSeconds: read("GUEST_TOKEN_TTL_SECONDS", 7_200, "positive-integer") }
+        : null,
+  } as const;
+}
+
 /** Reads and validates the configuration; throws on the first invalid value. */
 export function loadEnv(source: Source = process.env) {
   const read = (name: string, fallback: number, rule: NumberRule) => readNumber(source, name, fallback, rule);
@@ -67,6 +106,8 @@ export function loadEnv(source: Source = process.env) {
      * and for the moment the battle finishes on its own.
      */
     wordRaceFallbackDurationMs: read("WORD_RACE_FALLBACK_DURATION_MS", 90_000, "positive"),
+    /** Token validation: Microsoft Entra ID for registered users, a shared secret for guests. */
+    auth: readAuth(source, read),
   } as const;
 }
 

@@ -22,6 +22,7 @@ import type { Room } from "../src/domain/model/Room.js";
 import { InMemoryRoomRepository } from "../src/infrastructure/persistence/InMemoryRoomRepository.js";
 import { registerSocketHandlers, type BattleServer, type SocketHandlersHandle } from "../src/infrastructure/ws/socketHandlers.js";
 import { readyUp } from "./support/ready.js";
+import { trustClaimedPlayerId } from "./support/auth.js";
 
 const PHRASE = "dale play";
 const CHALLENGE_MS = 400;
@@ -86,6 +87,7 @@ before(async () => {
   httpServer = createServer();
   io = new Server(httpServer, { path: "/socket.io" });
   handlers = registerSocketHandlers(io, {
+    authenticateHandshake: trustClaimedPlayerId,
     joinRoom: new JoinRoom(rooms),
     startBattle: new StartBattle(rooms),
     selectRole: new SelectRole(rooms),

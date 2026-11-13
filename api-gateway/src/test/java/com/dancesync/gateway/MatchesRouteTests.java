@@ -1,6 +1,7 @@
 package com.dancesync.gateway;
 
-import com.sun.net.httpserver.HttpServer;
+import com.dancesync.gateway.support.FakeEntra;
+import com.dancesync.gateway.support.UpstreamStub;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -9,17 +10,11 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
-import java.io.IOException;
-import java.io.OutputStream;
-import java.io.UncheckedIOException;
-import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -27,13 +22,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The gateway exposes match results read-only: GETs reach users-service, while the
  * internal PUT that battle-service uses is not routed. A stub HTTP server stands in for
- * users-service and records what reached it.
+ * users-service and records what reached it. The match history is for registered
+ * users (SEG-1), so every request carries a valid Entra ID token.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class MatchesRouteTests {
 
-    private static final List<String> RECEIVED = new CopyOnWriteArrayList<>();
-    private static final HttpServer USERS_SERVICE = startUsersServiceStub();
+    private static final FakeEntra ENTRA = new FakeEntra();
+    private static final UpstreamStub USERS_SERVICE = new UpstreamStub();
 
     private final HttpClient client = HttpClient.newHttpClient();
 
@@ -42,17 +38,21 @@ class MatchesRouteTests {
 
     @DynamicPropertySource
     static void routeToStub(DynamicPropertyRegistry registry) {
-        registry.add("USERS_SERVICE_URL", () -> "http://localhost:" + USERS_SERVICE.getAddress().getPort());
+        registry.add("USERS_SERVICE_URL", USERS_SERVICE::url);
+        registry.add("AZURE_TENANT_ID", () -> FakeEntra.TENANT_ID);
+        registry.add("AZURE_CLIENT_ID", () -> FakeEntra.CLIENT_ID);
+        registry.add("ENTRA_JWKS_URI", ENTRA::jwkSetUri);
     }
 
     @AfterAll
     static void stopStub() {
-        USERS_SERVICE.stop(0);
+        USERS_SERVICE.stop();
+        ENTRA.stop();
     }
 
     @BeforeEach
     void clearReceived() {
-        RECEIVED.clear();
+        USERS_SERVICE.clear();
     }
 
     @Test
@@ -61,7 +61,7 @@ class MatchesRouteTests {
 
         assertEquals(200, response.statusCode());
         assertEquals("{\"stub\":true}", response.body());
-        assertEquals(List.of("GET /api/matches/11111111-2222-4333-8444-555555555555"), RECEIVED);
+        assertEquals(List.of("GET /api/matches/11111111-2222-4333-8444-555555555555"), USERS_SERVICE.requests());
     }
 
     @Test
@@ -69,7 +69,7 @@ class MatchesRouteTests {
         HttpResponse<String> response = send("GET", "/api/matches?roomCode=ABC123");
 
         assertEquals(200, response.statusCode());
-        assertEquals(List.of("GET /api/matches?roomCode=ABC123"), RECEIVED);
+        assertEquals(List.of("GET /api/matches?roomCode=ABC123"), USERS_SERVICE.requests());
     }
 
     @Test
@@ -77,7 +77,7 @@ class MatchesRouteTests {
         HttpResponse<String> response = send("PUT", "/api/matches/11111111-2222-4333-8444-555555555555");
 
         assertEquals(404, response.statusCode());
-        assertTrue(RECEIVED.isEmpty(), "the PUT must not reach users-service");
+        assertTrue(USERS_SERVICE.requests().isEmpty(), "the PUT must not reach users-service");
     }
 
     @Test
@@ -85,7 +85,7 @@ class MatchesRouteTests {
         HttpResponse<String> response = send("GET", "/api/users/11111111-2222-4333-8444-555555555555");
 
         assertEquals(200, response.statusCode());
-        assertEquals(List.of("GET /api/users/11111111-2222-4333-8444-555555555555"), RECEIVED);
+        assertEquals(List.of("GET /api/users/11111111-2222-4333-8444-555555555555"), USERS_SERVICE.requests());
     }
 
     private HttpResponse<String> send(String method, String pathAndQuery) throws Exception {
@@ -94,28 +94,8 @@ class MatchesRouteTests {
                         ? HttpRequest.BodyPublishers.noBody()
                         : HttpRequest.BodyPublishers.ofString("{}"))
                 .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + ENTRA.userToken("user-ana"))
                 .build();
         return client.send(request, HttpResponse.BodyHandlers.ofString());
-    }
-
-    private static HttpServer startUsersServiceStub() {
-        try {
-            HttpServer server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
-            server.createContext("/", exchange -> {
-                URI uri = exchange.getRequestURI();
-                RECEIVED.add(exchange.getRequestMethod() + " " + uri.getRawPath()
-                        + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery()));
-                byte[] body = "{\"stub\":true}".getBytes(StandardCharsets.UTF_8);
-                exchange.getResponseHeaders().add("Content-Type", "application/json");
-                exchange.sendResponseHeaders(200, body.length);
-                try (OutputStream out = exchange.getResponseBody()) {
-                    out.write(body);
-                }
-            });
-            server.start();
-            return server;
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
     }
 }

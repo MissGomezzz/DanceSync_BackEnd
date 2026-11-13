@@ -73,3 +73,32 @@ describe("Battle start countdown", () => {
     }
   });
 });
+
+describe("Authentication configuration (SEG-1)", () => {
+  it("fails closed by default: neither Entra ID nor guest tokens are configured", () => {
+    const { auth } = loadEnv({});
+    assert.equal(auth.entra, null);
+    assert.equal(auth.guest, null);
+  });
+
+  it("derives the issuer and the key set from the tenant, and the audience from the client id", () => {
+    const { auth } = loadEnv({ AZURE_TENANT_ID: " tenant-1 ", AZURE_CLIENT_ID: "client-1" });
+    assert.deepEqual(auth.entra, {
+      issuer: "https://login.microsoftonline.com/tenant-1/v2.0",
+      jwksUri: "https://login.microsoftonline.com/tenant-1/discovery/v2.0/keys",
+      audiences: ["client-1"],
+    });
+    const custom = loadEnv({ AZURE_TENANT_ID: "tenant-1", AZURE_CLIENT_ID: "client-1", AZURE_API_AUDIENCE: "client-1, api://client-1" });
+    assert.deepEqual(custom.auth.entra?.audiences, ["client-1", "api://client-1"]);
+    // A tenant without an audience cannot validate anything: still not configured.
+    assert.equal(loadEnv({ AZURE_TENANT_ID: "tenant-1" }).auth.entra, null);
+  });
+
+  it("reads the guest secret and lifetime, and refuses a secret shorter than 32 bytes", () => {
+    const secret = "s".repeat(32);
+    assert.deepEqual(loadEnv({ GUEST_TOKEN_SECRET: secret }).auth.guest, { secret, ttlSeconds: 7_200 });
+    assert.equal(loadEnv({ GUEST_TOKEN_SECRET: secret, GUEST_TOKEN_TTL_SECONDS: "900" }).auth.guest?.ttlSeconds, 900);
+    assert.throws(() => loadEnv({ GUEST_TOKEN_SECRET: "too-short" }), /GUEST_TOKEN_SECRET must be at least 32 bytes/);
+    assert.throws(() => loadEnv({ GUEST_TOKEN_SECRET: secret, GUEST_TOKEN_TTL_SECONDS: "0" }), /GUEST_TOKEN_TTL_SECONDS/);
+  });
+});

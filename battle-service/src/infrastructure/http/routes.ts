@@ -1,13 +1,19 @@
 import express, { Router, type NextFunction, type Request, type Response } from "express";
+import { AuthError } from "../../application/auth/AuthIdentity.js";
 import type { CreateRoom } from "../../application/usecases/CreateRoom.js";
+import type { IssueGuestToken } from "../../application/usecases/IssueGuestToken.js";
 import { DomainError, type DomainErrorCode } from "../../domain/errors/DomainError.js";
-import { MAX_PLAYER_ID_LENGTH } from "../../domain/model/Player.js";
 import type { Room } from "../../domain/model/Room.js";
 import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
 import { requireRoomCode } from "../../domain/services/RoomService.js";
 import { toRoomDto } from "../serialization/roomDto.js";
+import { createHttpAuth, identityOf, type HttpAuth, type HttpAuthDependencies } from "./httpAuth.js";
 
 export interface HttpDependencies {
+  /** Token validation (SEG-1): every route but the health check and the guest token needs one. */
+  auth: HttpAuthDependencies;
+  /** Issues guest tokens; absent when GUEST_TOKEN_SECRET is not configured (the route answers 503). */
+  issueGuestToken?: IssueGuestToken;
   createRoom: CreateRoom;
   rooms: RoomRepository;
   /** Notified after a room is created, so a room whose host never connects can be reaped. */
@@ -24,8 +30,8 @@ export interface HttpDependencies {
 /** Why the client is leaving; see POST /api/rooms/:code/leave. */
 type LeaveReason = "explicit" | "pagehide";
 
-/** Largest leave request accepted; it only carries a player id. */
-const LEAVE_BODY_LIMIT = "1kb";
+/** Largest leave request accepted; it only carries a token and a reason. */
+const LEAVE_BODY_LIMIT = "8kb";
 
 const STATUS_BY_CODE: Record<DomainErrorCode, number> = {
   ROOM_NOT_FOUND: 404,
@@ -58,16 +64,21 @@ const STATUS_BY_CODE: Record<DomainErrorCode, number> = {
 
 export function buildRouter(deps: HttpDependencies): Router {
   const router = Router();
+  const auth = createHttpAuth(deps.auth);
+  router.use(auth.correlation);
 
   router.get("/api/battles/health", (_req, res) => {
     res.json({ status: "UP", service: "battle-service" });
   });
 
-  router.post("/api/rooms", async (req, res, next) => {
+  // Registered users only: a guest token is refused with 403. The host is the
+  // user in the token; a hostId in the body is ignored.
+  router.post("/api/rooms", auth.require("registered"), async (req, res, next) => {
     try {
-      // CreateRoom validates both fields and answers INVALID_PLAYER (400) otherwise.
-      const { hostId, displayName } = (req.body ?? {}) as { hostId: string; displayName: string };
-      const room = await deps.createRoom.execute({ hostId, displayName });
+      const identity = identityOf(res);
+      // CreateRoom validates the display name and answers INVALID_PLAYER (400) otherwise.
+      const { displayName = identity.displayName } = (req.body ?? {}) as { displayName?: string };
+      const room = await deps.createRoom.execute({ hostId: identity.playerId, displayName: displayName as string });
       deps.onRoomCreated?.(room);
       res.status(201).location(`/api/rooms/${room.code}`).json(toRoomDto(room, new Date()));
     } catch (error) {
@@ -75,8 +86,29 @@ export function buildRouter(deps: HttpDependencies): Router {
     }
   });
 
-  router.get("/api/rooms/:code", async (req, res, next) => {
+  /**
+   * Public on purpose: this is how someone without an account gets in. With the
+   * code of an existing room and a display name they receive a short-lived
+   * token, signed by this service and valid only for that room, plus the player
+   * id it carries. It allows neither creating rooms nor reading the match history.
+   */
+  router.post("/api/rooms/:code/guest-token", async (req, res, next) => {
     try {
+      if (!deps.issueGuestToken) {
+        res.status(503).json({ error: "Guest access is not configured", code: "GUEST_ACCESS_UNAVAILABLE" });
+        return;
+      }
+      const { displayName } = (req.body ?? {}) as { displayName: string };
+      const guest = await deps.issueGuestToken.execute({ roomCode: req.params.code, displayName });
+      res.status(201).json({ ...guest, expiresAt: guest.expiresAt.toISOString() });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get("/api/rooms/:code", auth.require("any"), async (req, res, next) => {
+    try {
+      auth.requireRoom(identityOf(res), String(req.params.code));
       const room = await deps.rooms.findByCode(String(req.params.code));
       if (!room) {
         res.status(404).json({ error: `Room ${req.params.code} does not exist` });
@@ -89,7 +121,9 @@ export function buildRouter(deps: HttpDependencies): Router {
   });
 
   /**
-   * The player leaves the room (HU 22): { playerId, reason?: "explicit" | "pagehide" }.
+   * The player leaves the room (HU 22): { reason?: "explicit" | "pagehide", token? }.
+   * The player is the one identified by the token, sent in the Authorization
+   * header or, by the beacon (which cannot set headers), in the body.
    * - explicit (default): the same departure as the room:leave socket event, at
    *   once; 204.
    * - pagehide: sent by navigator.sendBeacon when the page is hidden. Browsers
@@ -100,8 +134,7 @@ export function buildRouter(deps: HttpDependencies): Router {
    *   instead of after the disconnect grace.
    * A beacon cannot wait for a socket ack and sends its body as text/plain (a
    * JSON content type would need a CORS preflight a beacon cannot make), so the
-   * body is accepted as JSON or as JSON text. Identity is the mocked guest id,
-   * like every other action until Entra ID.
+   * body is accepted as JSON or as JSON text.
    */
   router.post(
     "/api/rooms/:code/leave",
@@ -110,7 +143,10 @@ export function buildRouter(deps: HttpDependencies): Router {
       try {
         if (!deps.leaveRoom) throw new Error("Leaving over HTTP is not wired");
         const roomCode = requireRoomCode(req.params.code).toUpperCase();
-        const { playerId, reason } = readLeaveRequest(req.body);
+        const { token, reason } = readLeaveRequest(req.body);
+        const identity = await auth.identify(req, "any", token);
+        auth.requireRoom(identity, roomCode);
+        const playerId = identity.playerId;
         if (reason === "explicit") {
           await deps.leaveRoom(roomCode, playerId);
           res.status(204).end();
@@ -131,33 +167,37 @@ export function buildRouter(deps: HttpDependencies): Router {
     },
   );
 
+  router.use(authErrorHandler(auth));
   return router;
 }
 
-/** The player id and reason of a leave request, from a parsed JSON body or JSON sent as text. */
-function readLeaveRequest(body: unknown): { playerId: string; reason: LeaveReason } {
+/** Answers 401 / 403 for the router's own routes and records the attempt; other errors go on. */
+function authErrorHandler(auth: HttpAuth) {
+  return (error: unknown, req: Request, res: Response, next: NextFunction): void => {
+    if (error instanceof AuthError) auth.refuse(error, req, res);
+    else next(error);
+  };
+}
+
+/** The token (when sent in the body) and reason of a leave request, from a parsed JSON body or JSON sent as text. */
+function readLeaveRequest(body: unknown): { token: string | undefined; reason: LeaveReason } {
   let parsed = body;
   if (typeof body === "string") {
     try {
       parsed = JSON.parse(body);
     } catch {
-      throw new DomainError("INVALID_MESSAGE", "The body must be JSON: { playerId }");
+      throw new DomainError("INVALID_MESSAGE", "The body must be JSON: { reason?, token? }");
     }
   }
-  const { playerId, reason = "explicit" } =
-    typeof parsed === "object" && parsed !== null ? (parsed as { playerId?: unknown; reason?: unknown }) : {};
-  if (
-    typeof playerId !== "string" ||
-    playerId.length === 0 ||
-    playerId.length > MAX_PLAYER_ID_LENGTH ||
-    playerId.trim() !== playerId
-  ) {
-    throw new DomainError("INVALID_PLAYER", `playerId must be 1-${MAX_PLAYER_ID_LENGTH} characters without surrounding spaces`);
-  }
+  const { token, reason = "explicit" } =
+    typeof parsed === "object" && parsed !== null ? (parsed as { token?: unknown; reason?: unknown }) : {};
   if (reason !== "explicit" && reason !== "pagehide") {
     throw new DomainError("INVALID_MESSAGE", 'reason must be "explicit" or "pagehide"');
   }
-  return { playerId, reason };
+  if (token !== undefined && typeof token !== "string") {
+    throw new DomainError("INVALID_MESSAGE", "token must be a string");
+  }
+  return { token: token || undefined, reason };
 }
 
 export function errorHandler(error: unknown, _req: Request, res: Response, _next: NextFunction): void {

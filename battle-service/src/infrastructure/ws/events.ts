@@ -1,3 +1,4 @@
+import type { AuthIdentity } from "../../application/auth/AuthIdentity.js";
 import type { ChatMessage } from "../../domain/model/ChatMessage.js";
 import type { RoomDto } from "../serialization/roomDto.js";
 import type { SubmitWordOutcome } from "../../domain/model/WordRace.js";
@@ -37,34 +38,41 @@ export const ServerEvents = {
   ERROR: "error:domain",
 } as const;
 
+/**
+ * The acting player is always the one identified by the handshake token. The id
+ * fields clients used to send (`playerId`, `requesterId`, `senderId`, `voterId`,
+ * `from`) are optional and only cross-checked: an event naming someone else is
+ * refused with PLAYER_NOT_IN_ROOM.
+ */
 export interface RoomJoinPayload {
   roomCode: string;
-  playerId: string;
-  displayName: string;
+  playerId?: string;
+  /** Defaults to the name in the token. */
+  displayName?: string;
 }
 
 export interface RoomLeavePayload {
   roomCode: string;
-  playerId: string;
+  playerId?: string;
 }
 
 export interface RoleSelectPayload {
   roomCode: string;
-  playerId: string;
+  playerId?: string;
   role: "dancer" | "spectator";
 }
 
 /** Marks the player as ready (true) or not ready (false) while the room is waiting. */
 export interface PlayerReadyPayload {
   roomCode: string;
-  playerId: string;
+  playerId?: string;
   ready: boolean;
 }
 
 /** The host removes `playerId` from the lobby. */
 export interface PlayerKickPayload {
   roomCode: string;
-  requesterId: string;
+  requesterId?: string;
   playerId: string;
 }
 
@@ -75,19 +83,19 @@ export interface RoomKickedPayload {
 
 export interface BattleStartPayload {
   roomCode: string;
-  requesterId: string;
+  requesterId?: string;
   /** Overrides the dancers chosen through role:select; at least MIN_DANCERS_PER_BATTLE ids. */
   dancerIds?: string[];
 }
 
 export interface SongChallengeStartPayload {
   roomCode: string;
-  requesterId: string;
+  requesterId?: string;
 }
 
 export interface SongChallengeSubmitPayload {
   roomCode: string;
-  playerId: string;
+  playerId?: string;
   text: string;
 }
 
@@ -99,20 +107,20 @@ export interface SongChallengeSubmitResult {
 
 export interface SongChoosePayload {
   roomCode: string;
-  playerId: string;
+  playerId?: string;
   songId: string;
 }
 
 export interface ChatMessagePayload {
   roomCode: string;
-  senderId: string;
+  senderId?: string;
   content: string;
 }
 
 /** A spectator casts or moves their vote (dancerId) or withdraws it (null). */
 export interface VoteCastPayload {
   roomCode: string;
-  voterId: string;
+  voterId?: string;
   dancerId: string | null;
 }
 
@@ -134,7 +142,7 @@ export interface VoteMinePayload {
 /** The host takes a finished room back to the lobby. */
 export interface RoomRematchPayload {
   roomCode: string;
-  requesterId: string;
+  requesterId?: string;
 }
 
 /**
@@ -143,7 +151,7 @@ export interface RoomRematchPayload {
  */
 export interface WebRtcReadyPayload {
   roomCode: string;
-  playerId: string;
+  playerId?: string;
 }
 
 export interface WebRtcPeerReadyPayload {
@@ -176,7 +184,7 @@ export interface WebRtcSignalPayload {
 /** A dancer's attempt at the word currently on screen. */
 export interface WordSubmitPayload {
   roomCode: string;
-  playerId: string;
+  playerId?: string;
   roundId: string;
   text: string;
 }
@@ -256,6 +264,14 @@ export interface ServerToClientEvents {
 }
 
 export interface SocketData {
+  /**
+   * Who the connection belongs to, set once by the handshake authentication from
+   * the validated token. Every event acts as this identity.
+   */
+  auth?: AuthIdentity;
+  /** Correlation id of the handshake request, for the audit log. */
+  correlationId?: string;
+  /** The seat this socket is bound to by room:join; `playerId` is always `auth.playerId`. */
   playerId?: string;
   roomCode?: string;
 }
