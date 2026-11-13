@@ -23,10 +23,26 @@ public record AuthProperties(@DefaultValue Entra entra, @DefaultValue Guest gues
             return "https://login.microsoftonline.com/" + tenantId.trim();
         }
 
-        /** The v2.0 issuer of the tenant, unless overridden. */
+        /**
+         * True when the tenant is "common" (any organization and personal Microsoft
+         * accounts) or "organizations" (any organization): a multi-tenant application,
+         * like the MSAL authority of the same name.
+         */
+        public boolean anyTenant() {
+            if (StringUtils.hasText(issuerUri) || !StringUtils.hasText(tenantId)) return false;
+            String tenancy = tenantId.trim().toLowerCase(java.util.Locale.ROOT);
+            return tenancy.equals("common") || tenancy.equals("organizations");
+        }
+
+        /** With {@link #anyTenant()}: whether personal Microsoft accounts are accepted too ("common"). */
+        public boolean allowsPersonalAccounts() {
+            return anyTenant() && tenantId.trim().equalsIgnoreCase("common");
+        }
+
+        /** The v2.0 issuer of the tenant, unless overridden; null for a multi-tenant application. */
         public String resolvedIssuer() {
             if (StringUtils.hasText(issuerUri)) return issuerUri.trim();
-            return StringUtils.hasText(tenantId) ? authority() + "/v2.0" : null;
+            return StringUtils.hasText(tenantId) && !anyTenant() ? authority() + "/v2.0" : null;
         }
 
         /** Where the tenant publishes its signing keys, unless overridden. */
@@ -45,7 +61,8 @@ public record AuthProperties(@DefaultValue Entra entra, @DefaultValue Guest gues
         }
 
         public boolean configured() {
-            return resolvedIssuer() != null && resolvedJwkSetUri() != null && !resolvedAudiences().isEmpty();
+            return (resolvedIssuer() != null || anyTenant()) && resolvedJwkSetUri() != null
+                    && !resolvedAudiences().isEmpty();
         }
     }
 

@@ -19,9 +19,21 @@ export const MIN_GUEST_SECRET_BYTES = 32;
 /** Accepted difference between this clock and the issuer's, like Spring Security's default. */
 const CLOCK_TOLERANCE_SECONDS = 60;
 
+/** Tenant of the personal Microsoft accounts (Outlook, Hotmail, Xbox...). */
+export const PERSONAL_ACCOUNTS_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
+
+const ENTRA_ISSUER = /^https:\/\/login\.microsoftonline\.com\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/v2\.0$/;
+
 export interface EntraVerifierConfig {
-  /** `https://login.microsoftonline.com/{tenant}/v2.0` */
-  issuer: string;
+  /**
+   * `https://login.microsoftonline.com/{tenant}/v2.0`: only that tenant's users.
+   * Omitted: users of any Entra ID tenant (a multi-tenant application); the
+   * token's issuer must then be an Entra ID v2.0 issuer naming the same tenant
+   * as its `tid` claim.
+   */
+  issuer?: string;
+  /** Without a fixed issuer: also accept personal Microsoft accounts. Default false. */
+  allowPersonalAccounts?: boolean;
   /** Accepted `aud` values: the API's application (client) id and/or its App ID URI. */
   audiences: string[];
   /** Signing keys of the tenant: a remote JWKS in production, a local set in tests. */
@@ -59,21 +71,26 @@ export class JwtTokenVerifier implements TokenVerifier {
     const issuer = unverifiedIssuer(token);
     try {
       if (issuer === GUEST_TOKEN_ISSUER && this.config.guest) return await this.verifyGuest(token, this.config.guest);
-      if (this.config.entra && issuer === this.config.entra.issuer) return await this.verifyEntra(token, this.config.entra);
+      const entraTenant = this.config.entra && issuer ? acceptedEntraTenant(this.config.entra, issuer) : null;
+      if (this.config.entra && issuer && entraTenant) {
+        return await this.verifyEntra(token, this.config.entra, issuer, entraTenant);
+      }
     } catch (error) {
       throw toAuthError(error);
     }
     throw new AuthError("UNAUTHORIZED", "wrong_issuer");
   }
 
-  private async verifyEntra(token: string, entra: EntraVerifierConfig): Promise<AuthIdentity> {
+  private async verifyEntra(token: string, entra: EntraVerifierConfig, issuer: string, tenant: string): Promise<AuthIdentity> {
     const { payload } = await jwtVerify(token, entra.keys, {
-      issuer: entra.issuer,
+      issuer,
       audience: entra.audiences,
       algorithms: ["RS256"],
       clockTolerance: CLOCK_TOLERANCE_SECONDS,
       requiredClaims: ["exp"],
     });
+    // The issuer names a tenant; the token must have been issued for that same tenant.
+    if (!entra.issuer && payload.tid !== tenant) throw new AuthError("UNAUTHORIZED", "wrong_issuer");
     // `oid` identifies the user across every application of the tenant; `sub` is per application.
     const playerId = stringClaim(payload, "oid") ?? stringClaim(payload, "sub");
     if (!playerId || playerId.length > MAX_PLAYER_ID_LENGTH) throw new AuthError("UNAUTHORIZED", "invalid_claims");
@@ -119,6 +136,19 @@ export class JwtGuestTokenIssuer implements GuestTokenIssuer {
       .sign(this.secret);
     return { token, expiresAt: new Date(expiresAt * 1000) };
   }
+}
+
+/**
+ * The tenant whose keys must validate a token of `issuer`, or null when that
+ * issuer is not accepted: the configured one only, or any Entra ID v2.0 issuer
+ * (personal accounts only when allowed).
+ */
+function acceptedEntraTenant(entra: EntraVerifierConfig, issuer: string): string | null {
+  if (entra.issuer) return issuer === entra.issuer ? "configured" : null;
+  const tenant = ENTRA_ISSUER.exec(issuer)?.[1];
+  if (!tenant) return null;
+  if (tenant === PERSONAL_ACCOUNTS_TENANT && !entra.allowPersonalAccounts) return null;
+  return tenant;
 }
 
 /** The `iss` claim before any validation, only used to pick which keys must validate the token. */

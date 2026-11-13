@@ -34,10 +34,15 @@ import org.springframework.web.cors.reactive.CorsConfigurationSource;
 import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 import reactor.core.publisher.Mono;
 
+import org.springframework.security.oauth2.core.OAuth2Error;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
+
 import javax.crypto.spec.SecretKeySpec;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * SEG-1: the gateway is an OAuth2 resource server. Every HTTP request must
@@ -47,7 +52,9 @@ import java.util.Map;
  * <p>Two issuers are trusted, each with its own keys and algorithm:
  * <ul>
  *   <li>Microsoft Entra ID (RS256, keys from the tenant's JWKS): registered
- *       users, role USER. Only they may create rooms and read the match history.</li>
+ *       users, role USER. Only they may create rooms and read the match history.
+ *       With {@code AZURE_TENANT_ID=common} (or {@code organizations}) users of any
+ *       organization are accepted without being invited.</li>
  *   <li>battle-service (HS256, shared secret): guests, role GUEST. Their token
  *       is valid for one room only, the one in its {@code room} claim.</li>
  * </ul>
@@ -125,11 +132,29 @@ public class SecurityConfig {
                 && roomCode.equalsIgnoreCase(jwt.getToken().getClaimAsString(ROOM_CLAIM));
     }
 
-    /** Picks the keys that must validate a token from its issuer; an unknown issuer is refused. */
+    /** Tenant of the personal Microsoft accounts (Outlook, Hotmail, Xbox...). */
+    static final String PERSONAL_ACCOUNTS_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
+
+    /** An Entra ID v2.0 issuer: {@code https://login.microsoftonline.com/{tenant id}/v2.0}. */
+    private static final Pattern ENTRA_ISSUER = Pattern.compile(
+            "https://login\\.microsoftonline\\.com/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/v2\\.0");
+
+    /**
+     * Picks the keys that must validate a token from its issuer; an unknown issuer is refused.
+     * A multi-tenant application accepts the issuer of any Entra ID tenant, through one
+     * shared manager (so a flood of made-up issuers cannot grow any cache).
+     */
     private static JwtIssuerReactiveAuthenticationManagerResolver authenticationManagers(AuthProperties properties) {
         Map<String, ReactiveAuthenticationManager> byIssuer = new HashMap<>();
-        if (properties.entra().configured()) {
-            byIssuer.put(properties.entra().resolvedIssuer(), entraManager(properties.entra()));
+        AuthProperties.Entra entra = properties.entra();
+        ReactiveAuthenticationManager anyTenant = null;
+        if (entra.configured() && entra.anyTenant()) {
+            anyTenant = entraManager(entra, anyTenantIssuerValidator(entra.allowsPersonalAccounts()));
+            log.info("Accepting Microsoft Entra ID users of any organization{}",
+                    entra.allowsPersonalAccounts() ? " and personal Microsoft accounts" : "");
+        } else if (entra.configured()) {
+            byIssuer.put(entra.resolvedIssuer(),
+                    entraManager(entra, JwtValidators.createDefaultWithIssuer(entra.resolvedIssuer())));
         } else {
             log.warn("AZURE_TENANT_ID / AZURE_CLIENT_ID are not set: every registered-user token will be refused");
         }
@@ -138,17 +163,42 @@ public class SecurityConfig {
         } else {
             log.warn("GUEST_TOKEN_SECRET is not set: every guest token will be refused");
         }
-        return new JwtIssuerReactiveAuthenticationManagerResolver(issuer -> Mono.justOrEmpty(byIssuer.get(issuer)));
+        ReactiveAuthenticationManager anyTenantManager = anyTenant;
+        return new JwtIssuerReactiveAuthenticationManagerResolver(issuer -> {
+            ReactiveAuthenticationManager fixed = byIssuer.get(issuer);
+            if (fixed != null) return Mono.just(fixed);
+            return Mono.justOrEmpty(anyTenantManager != null && ENTRA_ISSUER.matcher(issuer).matches()
+                    ? anyTenantManager : null);
+        });
     }
 
-    private static ReactiveAuthenticationManager entraManager(AuthProperties.Entra entra) {
+    /**
+     * Expiry and not-before checks, plus: the issuer is an Entra ID v2.0 issuer and names the
+     * same tenant as the token's {@code tid} claim (personal accounts only when allowed).
+     */
+    private static OAuth2TokenValidator<Jwt> anyTenantIssuerValidator(boolean allowPersonalAccounts) {
+        OAuth2TokenValidator<Jwt> issuer = jwt -> {
+            String iss = jwt.getIssuer() == null ? "" : jwt.getIssuer().toString();
+            Matcher matcher = ENTRA_ISSUER.matcher(iss);
+            boolean valid = matcher.matches()
+                    && matcher.group(1).equals(jwt.getClaimAsString("tid"))
+                    && (allowPersonalAccounts || !PERSONAL_ACCOUNTS_TENANT.equals(matcher.group(1)));
+            return valid
+                    ? OAuth2TokenValidatorResult.success()
+                    : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token", "The iss claim is not valid", null));
+        };
+        return new DelegatingOAuth2TokenValidator<>(JwtValidators.createDefault(), issuer);
+    }
+
+    private static ReactiveAuthenticationManager entraManager(AuthProperties.Entra entra,
+                                                              OAuth2TokenValidator<Jwt> issuerValidator) {
         // Keys are fetched from the tenant's JWKS on first use and cached; only RS256 is accepted,
         // so an unsigned token or one "signed" with the public key as an HMAC secret is refused.
         NimbusReactiveJwtDecoder decoder = NimbusReactiveJwtDecoder.withJwkSetUri(entra.resolvedJwkSetUri())
                 .jwsAlgorithm(SignatureAlgorithm.RS256)
                 .build();
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
-                JwtValidators.createDefaultWithIssuer(entra.resolvedIssuer()),
+                issuerValidator,
                 audienceValidator(entra.resolvedAudiences())));
         // "oid" identifies the user in the tenant; it is the player id battle-service uses too.
         return manager(decoder, USER, jwt -> jwt.hasClaim("oid") ? jwt.getClaimAsString("oid") : jwt.getSubject());

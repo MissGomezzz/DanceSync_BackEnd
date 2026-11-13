@@ -49,8 +49,12 @@ function readAuth(source: Source, read: (name: string, fallback: number, rule: N
     .map((audience) => audience.trim())
     .filter((audience) => audience.length > 0);
   const authority = tenantId ? `https://login.microsoftonline.com/${tenantId}` : "";
+  // "common": any organization and personal Microsoft accounts; "organizations":
+  // any organization. Like the MSAL authority of the same name. A tenant id: that tenant only.
+  const tenancy = tenantId.toLowerCase();
+  const anyTenant = tenancy === "common" || tenancy === "organizations";
   // Overridable so tests (and sovereign clouds) can point at another issuer and key set.
-  const issuer = readText(source, "ENTRA_ISSUER_URI") || (authority && `${authority}/v2.0`);
+  const issuer = readText(source, "ENTRA_ISSUER_URI") || (authority && !anyTenant ? `${authority}/v2.0` : "");
   const jwksUri = readText(source, "ENTRA_JWKS_URI") || (authority && `${authority}/discovery/v2.0/keys`);
   const secret = source.GUEST_TOKEN_SECRET ?? "";
   if (secret.length > 0 && Buffer.byteLength(secret, "utf8") < MIN_GUEST_SECRET_LENGTH) {
@@ -58,7 +62,17 @@ function readAuth(source: Source, read: (name: string, fallback: number, rule: N
   }
   return {
     /** Null until AZURE_TENANT_ID and AZURE_CLIENT_ID are set. */
-    entra: issuer && jwksUri && audiences.length > 0 ? { issuer, jwksUri, audiences } : null,
+    entra:
+      (issuer || anyTenant) && jwksUri && audiences.length > 0
+        ? {
+            /** The only accepted issuer, or null to accept any Entra ID tenant (see anyTenant). */
+            issuer: issuer || null,
+            /** Only when issuer is null: also accept personal Microsoft accounts ("common"). */
+            allowPersonalAccounts: !issuer && tenancy === "common",
+            jwksUri,
+            audiences,
+          }
+        : null,
     /** Null until GUEST_TOKEN_SECRET is set (the same value as in the api-gateway). */
     guest:
       secret.length > 0

@@ -119,7 +119,7 @@ Defaults live in `.env.example`; every service falls back to the same values whe
 | `USERS_SERVICE_URL` | `http://localhost:8081` | api-gateway, battle-service |
 | `BATTLE_SERVICE_URL` | `http://localhost:3000` | api-gateway (HTTP and Socket.IO routes; the gateway upgrades to WebSocket automatically) |
 | `FRONTEND_ORIGIN` | `http://localhost:5173` | api-gateway (CORS) |
-| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` | empty | api-gateway, battle-service (Microsoft Entra ID tenant and application whose access tokens are accepted; empty = every registered-user token is refused) |
+| `AZURE_TENANT_ID` / `AZURE_CLIENT_ID` | empty | api-gateway, battle-service (Microsoft Entra ID tenant and application whose access tokens are accepted. `common` = any organization and personal accounts, `organizations` = any organization, a tenant id = that tenant only; empty = every registered-user token is refused) |
 | `AZURE_API_AUDIENCE` | `AZURE_CLIENT_ID` | api-gateway, battle-service (accepted `aud` values, comma separated) |
 | `GUEST_TOKEN_SECRET` | empty | api-gateway, battle-service (secret that signs the guest tokens, at least 32 bytes, the same in both; empty = guest tokens are neither issued nor accepted) |
 | `GUEST_TOKEN_TTL_SECONDS` | `7200` | battle-service (positive whole number; lifetime of a guest token) |
