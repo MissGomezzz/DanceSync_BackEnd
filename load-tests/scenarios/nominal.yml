@@ -1,0 +1,19 @@
+# REN-1, carga nominal: 20 salas x 7 jugadores = 140 usuarios.
+# 1 evento cada 2 s por usuario (~70 eventos/s entrantes), subida gradual de 60 s
+# y 10 min sostenidos. totalS = 60 (subida) + 600 (sostenido).
+# Criterio: p95 <= 300 ms y < 1 % de errores (ver scripts/summary.mjs).
+config:
+  target: "http://localhost:8080"
+  processor: "../lib/room-bot.cjs"
+  phases:
+    - name: subida-gradual
+      arrivalCount: 20
+      duration: 60
+  variables:
+    totalS: [660]
+    roomSize: [7]
+    eventEveryMs: [2000]
+scenarios:
+  - name: "sala de 7 jugadores"
+    flow:
+      - function: "runRoom"

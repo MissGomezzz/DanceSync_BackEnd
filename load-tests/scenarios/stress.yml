@@ -1,0 +1,24 @@
+# REN-1, prueba de estrés: se suben salas por rampa hasta que el p95 supere 300 ms.
+# Cada sala se queda hasta totalS, así que los usuarios concurrentes crecen en la rampa.
+# 0.1 -> 0.8 salas/s durante 300 s (~135 salas, ~945 usuarios) y luego 120 s a 0.8 salas/s
+# (~230 salas, ~1.600 usuarios). Ajusta arrivalRate/rampTo según la capacidad de tu máquina.
+# totalS = 300 + 120.
+config:
+  target: "http://localhost:8080"
+  processor: "../lib/room-bot.cjs"
+  phases:
+    - name: rampa
+      duration: 300
+      arrivalRate: 0.1
+      rampTo: 0.8
+    - name: meseta
+      duration: 120
+      arrivalRate: 0.8
+  variables:
+    totalS: [420]
+    roomSize: [7]
+    eventEveryMs: [2000]
+scenarios:
+  - name: "sala de 7 jugadores"
+    flow:
+      - function: "runRoom"

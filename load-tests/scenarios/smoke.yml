@@ -1,0 +1,17 @@
+# Prueba de humo: 3 salas (21 usuarios), un ciclo completo de batalla (~100 s).
+# Sirve para comprobar que el script y el servidor funcionan antes de una prueba larga.
+config:
+  target: "http://localhost:8080"
+  processor: "../lib/room-bot.cjs"
+  phases:
+    - name: humo
+      arrivalCount: 3
+      duration: 5
+  variables:
+    totalS: [60]
+    roomSize: [7]
+    eventEveryMs: [2000]
+scenarios:
+  - name: "sala de 7 jugadores"
+    flow:
+      - function: "runRoom"
