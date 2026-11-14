@@ -74,3 +74,34 @@ node scripts/run.mjs stress  --target http://localhost:3000 --label estres-1-rep
 - Si el generador de carga y el servidor corren en la misma máquina, compiten por CPU: anótalo en el informe.
 - Con 1 sola réplica y sin límite de CPU, 140 usuarios son una carga baja. La comparación 1 vs 2 réplicas
   se hace en la prueba de estrés, limitando la CPU de cada contenedor para poder saturar una réplica.
+
+## Entorno de escala (Redis + 2 réplicas + balanceador)
+
+`../docker-compose.scale.yml` levanta Redis, un Entra ID falso, dos réplicas del Battle Service y nginx
+(punto de entrada: `http://localhost:8088`). Cada réplica tiene el mismo límite de recursos
+(`BATTLE_CPUS`, por defecto 0.5, y `BATTLE_MEMORY`, 512m), así 1 vs 2 réplicas es una comparación justa.
+
+En la carpeta del backend (la que contiene `docker-compose.scale.yml`), en CMD de Windows:
+
+```sh
+docker compose -f docker-compose.scale.yml up -d --build
+docker compose -f docker-compose.scale.yml ps                 # todo en "healthy"
+curl http://localhost:8088/api/battles/health
+```
+
+Para elegir cuántas réplicas reciben tráfico (en CMD, el `set` va en su propia línea):
+
+```sh
+set LB_REPLICAS=2
+docker compose -f docker-compose.scale.yml up -d              # 2 réplicas (por defecto)
+set LB_REPLICAS=1
+docker compose -f docker-compose.scale.yml up -d              # solo battle-1 recibe tráfico
+```
+
+Qué réplica atendió cada conexión: `docker logs dancesync-lb` (campo `upstream=`).
+Consumo por réplica durante una prueba: `docker stats dancesync-battle-1 dancesync-battle-2`.
+Para apagar todo: `docker compose -f docker-compose.scale.yml down`.
+
+El balanceador de este prototipo hace verificación de salud pasiva (nginx de código abierto): si una réplica falla,
+las conexiones nuevas van a la otra. En Azure Container Apps el ingreso hace sondeos activos.
+Las credenciales del compose son de prueba y no deben usarse fuera de una máquina de pruebas.

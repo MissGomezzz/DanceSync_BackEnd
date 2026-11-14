@@ -1,0 +1,87 @@
+# Entorno de escala del Battle Service (REN-1 / DIS-1): Redis + 2 réplicas + balanceador.
+# Es independiente de docker-compose.yml (que solo trae PostgreSQL) y usa un Entra ID falso
+# solo para las pruebas de carga: NO usar estos valores fuera de una máquina de pruebas.
+#
+#   docker compose -f docker-compose.scale.yml up -d --build        (2 réplicas con tráfico)
+#   set LB_REPLICAS=1 && docker compose -f docker-compose.scale.yml up -d     (solo battle-1 recibe tráfico)
+#
+# Punto de entrada para las pruebas: http://localhost:8088 (balanceador).
+name: dancesync-scale
+
+x-battle: &battle
+  build: ./battle-service
+  restart: "no"
+  # Mismos recursos para cada réplica en todas las pruebas: así 1 vs 2 réplicas es una comparación justa.
+  cpus: ${BATTLE_CPUS:-0.5}
+  mem_limit: ${BATTLE_MEMORY:-512m}
+  environment:
+    PORT: "3000"
+    REDIS_URL: redis://redis:6379
+    # Credenciales de PRUEBA (las mismas que usa load-tests/lib/fake-entra.cjs).
+    AZURE_TENANT_ID: 11111111-1111-4111-8111-111111111111
+    AZURE_CLIENT_ID: 22222222-2222-4222-8222-222222222222
+    ENTRA_JWKS_URI: http://fake-entra:4010/discovery/v2.0/keys
+    GUEST_TOKEN_SECRET: una-clave-de-prueba-de-al-menos-32-caracteres
+  depends_on:
+    redis:
+      condition: service_healthy
+    fake-entra:
+      condition: service_healthy
+  healthcheck:
+    test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/battles/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+    start_period: 5s
+
+services:
+  redis:
+    image: redis:7-alpine
+    # Estado volátil: es un prototipo de pruebas, sin persistencia en disco.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+  fake-entra:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "scripts/fake-entra.mjs", "4010"]
+    volumes:
+      - ./load-tests/scripts:/app/scripts:ro
+      - ./load-tests/lib:/app/lib:ro
+      # La clave se crea aquí al primer arranque; los bots de carga la leen del mismo archivo.
+      - ./load-tests/.keys:/app/.keys
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:4010/discovery/v2.0/keys').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+
+  battle-1:
+    <<: *battle
+    container_name: dancesync-battle-1
+    ports:
+      - "3001:3000"
+
+  battle-2:
+    <<: *battle
+    container_name: dancesync-battle-2
+    ports:
+      - "3002:3000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: dancesync-lb
+    depends_on:
+      battle-1:
+        condition: service_healthy
+      battle-2:
+        condition: service_healthy
+    ports:
+      - "${LB_PORT:-8088}:80"
+    volumes:
+      - ./load-balancer/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./load-balancer/upstream-${LB_REPLICAS:-2}.conf:/etc/nginx/upstream.conf:ro
