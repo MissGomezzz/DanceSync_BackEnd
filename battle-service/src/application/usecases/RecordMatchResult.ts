@@ -164,6 +164,17 @@ export class RecordMatchResult {
     return result;
   }
 
+  /** Matches still waiting in the outbox (OBS-1), or null without an outbox or when it cannot be read. */
+  async pendingCount(): Promise<number | null> {
+    if (!this.outbox?.count) return null;
+    try {
+      return await this.outbox.count();
+    } catch (error) {
+      this.logger.error({ err: error }, "Could not count the pending matches");
+      return null;
+    }
+  }
+
   private async reschedule(pending: PendingMatch, error: unknown): Promise<void> {
     const attempts = pending.attempts + 1;
     const permanent = error instanceof MatchPublishError && !error.retryable;

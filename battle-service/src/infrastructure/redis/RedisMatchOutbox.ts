@@ -77,6 +77,10 @@ export class RedisMatchOutbox implements MatchOutbox {
     await this.ackScript(this.pendingKey, this.deliveredKey, matchId, this.options.deliveredRetentionSeconds * 1000);
   }
 
+  async count(): Promise<number> {
+    return this.redis.hlen(this.pendingKey);
+  }
+
   async retryLater(pending: PendingMatch): Promise<void> {
     await this.retryScript(this.pendingKey, pending.match.id, encodeWithDates(pending));
   }

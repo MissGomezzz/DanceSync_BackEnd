@@ -16,5 +16,6 @@ COPY package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 USER node
-EXPOSE 3000
+# 3000: API and Socket.IO. 9464: Prometheus /metrics (METRICS_PORT), internal only.
+EXPOSE 3000 9464
 CMD ["node", "dist/server.js"]

@@ -18,6 +18,8 @@ import type { AwardWordBonus } from "../../application/usecases/AwardWordBonus.j
 import type { SubmitWord } from "../../application/usecases/SubmitWord.js";
 import { AuthError, mayActInRoom, type AuthIdentity } from "../../application/auth/AuthIdentity.js";
 import type { LogFields, Logger } from "../../application/ports/Logger.js";
+import { noopMetrics, type Metrics } from "../../application/ports/Metrics.js";
+import type { SessionTracker } from "../../application/ports/SessionTracker.js";
 import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
 import { RoomService } from "../../domain/services/RoomService.js";
@@ -88,6 +90,10 @@ export interface SocketDependencies {
   wordRace?: WordRaceSocketDependencies;
   /** Structured logs (OBS-1). Default: the process logger. */
   logger?: Logger;
+  /** Business and technical metrics (OBS-1). Default: none. */
+  metrics?: Metrics;
+  /** Tells which signed-in handshakes start a session (OBS-1). Absent: user sessions are not counted. */
+  sessions?: SessionTracker;
 }
 
 export interface WordRaceSocketDependencies {
@@ -148,12 +154,13 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    */
   const audit = deps.authAudit ?? consoleAuthAudit;
   const logger = deps.logger ?? rootLogger;
+  const metrics = deps.metrics ?? noopMetrics;
   // No connection is accepted without a valid token: this runs before "connection".
   io.use(deps.authenticateHandshake);
   const graceTimers = new Map<string, NodeJS.Timeout>();
   /** When each pending grace timer fires (epoch ms), so a later, longer grace never postpones it. */
   const graceDeadlines = new Map<string, number>();
-  const roomTimers = new RoomTimers();
+  const roomTimers = new RoomTimers(undefined, logger, metrics);
   /**
    * Version of the room state the timers were last armed from. Two handlers can
    * publish out of order (version N after N+1); an older state must not clear or
@@ -166,7 +173,10 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   const unboundSince = new Map<string, number>();
   const createdRoomGraceMs = deps.reaping?.createdRoomGraceMs ?? deps.disconnectGraceMs + CREATED_ROOM_MARGIN_MS;
   const sweepTimer = setInterval(() => {
-    sweep().catch((error: unknown) => logger.error({ err: error }, "Error sweeping abandoned rooms"));
+    sweep().catch((error: unknown) => {
+      metrics.error("sweep");
+      logger.error({ err: error }, "Error sweeping abandoned rooms");
+    });
   }, deps.reaping?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
   sweepTimer.unref();
 
@@ -248,6 +258,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   /** Single exit for every path that starts a battle: the host's start or the chosen song. */
   function announceBattleStarted(room: Room): void {
     const log = logger.child(battleFields(room));
+    metrics.battleStarted();
     log.info({ dancers: room.battle?.dancerIds.length, spectators: room.battle?.audience.length }, "Battle started");
     io.to(room.code).emit(ServerEvents.BATTLE_STARTED, toRoomDto(room, new Date()));
     publishRoom(room);
@@ -267,10 +278,9 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    */
   async function announceBattleFinished(room: Room): Promise<void> {
     const log = logger.child(battleFields(room));
-    log.info(
-      { endReason: room.battle?.endReason, durationSeconds: battleDurationSeconds(room), winnerId: room.battle?.result?.winnerId },
-      "Battle finished",
-    );
+    const durationSeconds = battleDurationSeconds(room);
+    if (durationSeconds !== null) metrics.battleFinished(durationSeconds);
+    log.info({ endReason: room.battle?.endReason, durationSeconds, winnerId: room.battle?.result?.winnerId }, "Battle finished");
     publishRoom(room);
     io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, toRoomDto(room, new Date()));
     deps.recordMatchResult
@@ -468,12 +478,16 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     // the list were deleted elsewhere, and their timers can go.
     const armedBefore = [...armedVersions.keys()];
     const listed = new Set<string>();
-    for (const room of await deps.reapRooms.list()) {
+    const rooms = await deps.reapRooms.list();
+    // OBS-1: read from the shared store, so every replica reports the same value.
+    metrics.roomsActive(rooms.filter((room) => room.players.length > 0).length);
+    for (const room of rooms) {
       listed.add(room.code.toUpperCase());
       for (const player of room.players) seen.add(seatKey(room.code, player.id));
       try {
         await sweepRoom(room, now);
       } catch (error) {
+        metrics.error("sweep");
         logger.error({ roomId: room.code, err: error }, "Error sweeping room");
         // Its seats could not be observed: a gap in the observations must never
         // count as time without a socket (DIS-1, e.g. during a failover).
@@ -485,6 +499,17 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     for (const key of unboundSince.keys()) if (!seen.has(key)) unboundSince.delete(key);
     // DIS-1: every replica delivers the results still pending, whoever finished the battle.
     await deps.recordMatchResult?.drain();
+    await reportPendingMatches();
+  }
+
+  /** OBS-1 gauge of the shared outbox; a metric must never break the sweep. */
+  async function reportPendingMatches(): Promise<void> {
+    try {
+      const pending = await deps.recordMatchResult?.pendingCount();
+      if (typeof pending === "number") metrics.matchOutboxPending(pending);
+    } catch (error) {
+      logger.warn({ err: error }, "Could not report the pending matches");
+    }
   }
 
   async function sweepRoom(room: Room, now: number): Promise<void> {
@@ -535,9 +560,22 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       userKind: socket.data.auth?.kind,
     });
     log.info({ playerId: socket.data.auth?.playerId }, "Socket connected");
-    /** Runs a client event through guard, logging it with this connection's correlation id. */
+    const kind = socket.data.auth?.kind;
+    if (kind) metrics.socketConnected(kind);
+    // A guest session starts with its token (POST guest-token); a signed-in one at
+    // a handshake after 30 min without any, counted once across replicas.
+    const identity = socket.data.auth;
+    if (identity?.kind === "user" && deps.sessions) {
+      deps.sessions.touch(identity.playerId).then(
+        (started) => {
+          if (started) metrics.sessionStarted("user");
+        },
+        (error: unknown) => log.warn({ err: error }, "Could not record the session"),
+      );
+    }
+    /** Runs a client event through guard, logging and measuring it with this connection's correlation id. */
     const handle = <T>(event: string, ack: Ack<T> | undefined, handler: () => Promise<T>): Promise<void> =>
-      guard(socket, ack, handler, { event, log });
+      guard(socket, ack, handler, { event, log, metrics });
 
     // room:join binds the socket to a seat: every other event must act in the room
     // recorded here, see requireOwnSeat. The player is the one identified by the
@@ -652,6 +690,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         // Only the submission whose atomic claim succeeded announces the winner, so
         // the room receives exactly one word:round-ended per round.
         if (result.outcome === "won") {
+          // Only the submission whose atomic claim applied gets here: each round is counted once.
+          metrics.wordRoundEnded("won");
           logger.info(
             { ...raceFields(result.race), roundId: result.round.id, outcome: "won", winnerId: playerId },
             "Word round ended",
@@ -719,6 +759,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         });
         // Everyone gets the new totals; only the voter's own tabs learn the choice.
         if (changed) publishRoom(room);
+        // A new or switched vote; a repeated one or a withdrawal is not a vote.
+        if (changed && dancerId !== null) metrics.voteCast();
         emitVoteMine(room.code, voterId, dancerId);
         return { dancerId };
       }),
@@ -769,6 +811,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     socket.on("disconnect", (reason) => {
       const { playerId, roomCode } = socket.data;
       log.info({ roomId: roomCode, reason }, "Socket disconnected");
+      if (kind) metrics.socketDisconnected(kind);
       if (!playerId || !roomCode) return;
       // A refresh or a transient network drop disconnects the socket too. Removing the
       // player immediately would delete a room whose only player is reloading the page,
@@ -950,6 +993,7 @@ interface GuardContext {
   event: string;
   /** The connection's logger (correlationId, socketId, userKind). */
   log: Logger;
+  metrics: Metrics;
 }
 
 /** Events too chatty for the info level: WebRTC signaling relays every ICE candidate. */
@@ -972,16 +1016,18 @@ async function guard<T>(
   socket: BattleSocket,
   ack: Ack<T> | undefined,
   handler: () => Promise<T>,
-  { event, log }: GuardContext,
+  { event, log, metrics }: GuardContext,
 ): Promise<void> {
   const reply: Ack<T> | undefined = typeof ack === "function" ? ack : undefined;
   const startedAt = performance.now();
   const roomBefore = socket.data.roomCode;
   const done = (fields: LogFields): void => {
+    const durationMs = performance.now() - startedAt;
+    metrics.socketEventHandled(event, durationMs / 1000);
     const line = {
       event,
       roomId: socket.data.roomCode ?? roomBefore,
-      durationMs: Math.round((performance.now() - startedAt) * 100) / 100,
+      durationMs: Math.round(durationMs * 100) / 100,
       ...fields,
     };
     if (DEBUG_EVENTS.has(event) && fields.ok) log.debug(line, "Socket event handled");
@@ -997,7 +1043,10 @@ async function guard<T>(
       const payload = expected
         ? { code: error.code, message: error.message }
         : { code: "INTERNAL_ERROR", message: "Unexpected server error" };
-      if (!expected) log.error({ event, roomId: socket.data.roomCode ?? roomBefore, err: error }, "Unhandled socket error");
+      if (!expected) {
+        metrics.error("socket");
+        log.error({ event, roomId: socket.data.roomCode ?? roomBefore, err: error }, "Unhandled socket error");
+      }
       if (reply) reply({ ok: false, error: payload });
       else socket.emit(ServerEvents.ERROR, payload);
       done({ ok: false, code: payload.code });

@@ -1,4 +1,5 @@
 import type { LogFields, Logger } from "../../application/ports/Logger.js";
+import { noopMetrics, type Metrics } from "../../application/ports/Metrics.js";
 import type { ExpireWordRound } from "../../application/usecases/ExpireWordRound.js";
 import type { OpenWordRound } from "../../application/usecases/OpenWordRound.js";
 import type { ResumeWordRace } from "../../application/usecases/ResumeWordRace.js";
@@ -31,6 +32,8 @@ export interface WordRaceSchedulerDependencies {
   retryDelayMs?: number;
   /** Structured logs (OBS-1). Default: the process logger. */
   logger?: Logger;
+  /** Expired rounds and timer failures (OBS-1). Default: none. */
+  metrics?: Metrics;
 }
 
 const DEFAULT_RETRY_DELAY_MS = 50;
@@ -51,6 +54,7 @@ export class WordRaceScheduler {
   private readonly clock: () => Date;
   private readonly retryDelayMs: number;
   private readonly logger: Logger;
+  private readonly metrics: Metrics;
   /** Room (upper case) -> task ("open:<round>" / "expire:<round>") -> timer. One timer per task. */
   private readonly timers = new Map<string, Map<string, NodeJS.Timeout>>();
 
@@ -59,6 +63,7 @@ export class WordRaceScheduler {
     this.clock = deps.clock ?? (() => new Date());
     this.retryDelayMs = deps.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
     this.logger = deps.logger ?? rootLogger;
+    this.metrics = deps.metrics ?? noopMetrics;
   }
 
   /** Plans the race of a battle that just started and schedules every round opening. */
@@ -130,6 +135,8 @@ export class WordRaceScheduler {
   private async expire(roomCode: string, roundId: string): Promise<void> {
     const result = await this.deps.expireWordRound.execute({ roomCode, roundId });
     if (result.expired) {
+      // Only the replica whose expiry applied gets here: each round is counted once.
+      this.metrics.wordRoundEnded("expired");
       this.logger.info({ ...raceFields(result.race), roundId, outcome: "expired" }, "Word round ended");
       this.deps.broadcaster.roundEnded(result.race, result.round);
     } else if (result.round?.status === "open") {
@@ -148,7 +155,10 @@ export class WordRaceScheduler {
     const delay = Math.max(minDelayMs, at.getTime() - this.clock().getTime());
     const timer = setTimeout(() => {
       tasks.delete(task);
-      run().catch((error: unknown) => this.logger.error({ roomId: roomCode, task, err: error }, "Word race timer failed"));
+      run().catch((error: unknown) => {
+        this.metrics.error("timer");
+        this.logger.error({ roomId: roomCode, task, err: error }, "Word race timer failed");
+      });
     }, delay);
     // A pending round must never keep a stopping process alive.
     timer.unref();

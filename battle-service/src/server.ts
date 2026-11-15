@@ -41,10 +41,15 @@ import { WordRaceScheduler } from "./infrastructure/scheduling/WordRaceScheduler
 import { createSocketWordRaceBroadcaster } from "./infrastructure/ws/wordRaceMessages.js";
 import { rootLogger as logger } from "./infrastructure/logging/logger.js";
 import { createAccessLog } from "./infrastructure/http/accessLog.js";
+import { PromMetrics } from "./infrastructure/metrics/PromMetrics.js";
+import { startMetricsServer } from "./infrastructure/metrics/metricsServer.js";
+import { countingAbuseAudit, countingAuthAudit } from "./infrastructure/metrics/countingAudits.js";
 
 // Wiring: adapters -> use cases -> entry points.
 // REDIS_URL set: room and word race state in Redis (several instances). Not set: in memory, as before.
-const stateStores = createStateStores(undefined, { logger });
+// OBS-1: Prometheus metrics, served on their own port (METRICS_PORT), never by the public app.
+const metrics = new PromMetrics();
+const stateStores = createStateStores(undefined, { logger, metrics });
 const rooms = stateStores.rooms;
 const wordRaces = stateStores.wordRaces;
 const createRoom = new CreateRoom(rooms);
@@ -81,7 +86,8 @@ const tokenVerifier = new JwtTokenVerifier({
     : {}),
   ...(guestSecret ? { guest: { secret: guestSecret } } : {}),
 });
-const authAudit = consoleAuthAudit;
+// The audit lines stay exactly as they are; each refusal is also counted.
+const authAudit = countingAuthAudit(consoleAuthAudit, metrics);
 if (!env.auth.entra) {
   logger.warn({}, "AZURE_TENANT_ID / AZURE_CLIENT_ID are not set: every registered-user token will be refused");
 }
@@ -91,7 +97,13 @@ if (!env.auth.guest) {
 
 const app = express();
 // OBS-1: first, so every request (CORS preflights and errors included) gets its access line.
-app.use(createAccessLog({ logger }));
+app.use(
+  createAccessLog({
+    logger,
+    observe: ({ method, route, status, durationSeconds }) =>
+      metrics.httpRequestHandled(method, route, status, durationSeconds),
+  }),
+);
 app.use(cors({ origin: env.corsOrigin, credentials: true }));
 app.use(express.json());
 
@@ -117,6 +129,7 @@ const wordRaceScheduler = new WordRaceScheduler({
   resumeWordRace: new ResumeWordRace(rooms, wordRaces),
   broadcaster: createSocketWordRaceBroadcaster(io),
   logger,
+  metrics,
 });
 const socketHandlers = registerSocketHandlers(io, {
   authenticateHandshake: createHandshakeAuth({ verifier: tokenVerifier, audit: authAudit, logger }),
@@ -150,11 +163,18 @@ const socketHandlers = registerSocketHandlers(io, {
     getActiveWordRound: new GetActiveWordRound(wordRaces),
   },
   logger,
+  metrics,
+  sessions: stateStores.sessions,
 });
 // SEG-3: after the handshake authentication, so the block check knows who connects.
 // Every event goes through a token bucket before any handler; clients that keep
 // flooding are blocked (shared through Redis when REDIS_URL is set) and disconnected.
-attachAbuseProtection(io, { config: loadAbuseConfig(), blocks: stateStores.blocks, audit: consoleAbuseAudit, logger });
+attachAbuseProtection(io, {
+  config: loadAbuseConfig(),
+  blocks: stateStores.blocks,
+  audit: countingAbuseAudit(consoleAbuseAudit, metrics),
+  logger,
+});
 
 // HTTP routes go after the socket handlers so a created room can be watched:
 // if its host never connects, the room is reaped instead of living forever.
@@ -171,13 +191,25 @@ app.use(
     leaveAfterPagehide: (roomCode, playerId) => socketHandlers.leaveAfterPagehide(roomCode, playerId),
     readiness: () => stateStores.ping(),
     logger,
+    metrics,
   }),
 );
-app.use(createErrorHandler(logger));
+app.use(createErrorHandler(logger, metrics));
 
 httpServer.listen(env.port, () => {
   logger.info({ port: env.port, corsOrigin: env.corsOrigin }, "battle-service listening");
 });
+const metricsServer = startMetricsServer(metrics.registry, env.metricsPort, logger).then(
+  (server) => {
+    logger.info({ port: env.metricsPort, path: "/metrics" }, "Metrics endpoint listening");
+    return server;
+  },
+  (error: unknown) => {
+    // Metrics are not worth stopping the battles for: log it and keep serving.
+    logger.error({ port: env.metricsPort, err: error }, "Could not start the metrics endpoint");
+    return null;
+  },
+);
 
 function shutdown(signal: string): void {
   logger.info({ signal }, "Shutting down battle-service");
@@ -185,6 +217,7 @@ function shutdown(signal: string): void {
   // Only this replica's timers: the races stay in the store for the other replicas.
   wordRaceScheduler.close();
   io.close();
+  void metricsServer.then((server) => server?.close());
   httpServer.close(() => {
     void stateStores.close().finally(() => process.exit(0));
   });
@@ -198,6 +231,7 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 // uncaught exception may leave state half-updated, so that one is logged and the
 // process exits as Node recommends, to be restarted by its supervisor.
 process.on("unhandledRejection", (reason) => {
+  metrics.error("process");
   logger.error({ err: reason }, "Unhandled promise rejection");
 });
 process.on("uncaughtException", (error, origin) => {

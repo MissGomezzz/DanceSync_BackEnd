@@ -39,6 +39,10 @@ export class InMemoryMatchOutbox implements MatchOutbox {
     for (const [id, at] of this.delivered) if (now - at > this.deliveredRetentionMs) this.delivered.delete(id);
   }
 
+  async count(): Promise<number> {
+    return this.pending.size;
+  }
+
   async retryLater(pending: PendingMatch): Promise<void> {
     if (!this.pending.has(pending.match.id)) return;
     this.pending.set(pending.match.id, structuredClone(pending));
