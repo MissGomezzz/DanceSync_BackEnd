@@ -81,7 +81,7 @@ async function startReplica(name: string): Promise<Replica> {
   const stores = createStateStores({ url: TEST_REDIS_URL!, ttlSeconds: 300, maxUpdateAttempts: 25, adapterKey });
   const { rooms, wordRaces: races } = stores;
   const http = createServer();
-  const io = new Server(http, { path: "/socket.io" });
+  const io: BattleServer = new Server(http, { path: "/socket.io" });
   stores.attachAdapter(io);
   const scheduler = new WordRaceScheduler({
     startWordRace: new StartWordRace(rooms, races, { offsetsMs: OFFSETS_MS, windowMs: WINDOW_MS }),

@@ -63,6 +63,7 @@ node scripts/run.mjs stress  --target http://localhost:3000 --label estres-1-rep
 - `--label` queda en el nombre del reporte: `results/<escenario>-<label>-<fecha>.json`.
 - `node scripts/summary.mjs results/<archivo>.json` vuelve a imprimir el resumen y el veredicto.
 - `node scripts/compare.mjs <estres-1-replica.json> <estres-2-replicas.json>` compara el máximo de usuarios sostenido (evidencia de escalabilidad horizontal).
+- `node scripts/chart.mjs <estres-1-replica.json> <estres-2-replicas.json> <salida.svg>` dibuja el p95 contra los usuarios concurrentes de las dos corridas (SVG sin dependencias).
 - Los escenarios están en `scenarios/*.yml`; `totalS` debe ser la suma de las fases (subida + sostenido).
 - Cada sala termina el ciclo de batalla en curso al acabar `totalS`, así que la corrida dura hasta ~100 s más.
 

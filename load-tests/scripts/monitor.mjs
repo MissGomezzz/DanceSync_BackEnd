@@ -14,6 +14,17 @@ function hostTimes() {
   return { idle, total };
 }
 
+/** "7.6MiB / 31.2GiB" -> 7.6. Solo cuenta lo usado: la unidad del límite no se mezcla con la del valor. */
+function toMiB(usage = "") {
+  const used = usage.split("/")[0].trim();
+  const value = parseFloat(used);
+  if (Number.isNaN(value)) return 0;
+  if (/GiB|GB/.test(used)) return value * 1024;
+  if (/KiB|kB/.test(used)) return value / 1024;
+  if (/^[\d.]+B$/.test(used)) return value / 1048576;
+  return value; // MiB o MB
+}
+
 function dockerSample() {
   return new Promise((resolve) => {
     execFile(
@@ -26,7 +37,7 @@ function dockerSample() {
         for (const line of stdout.split(/\r?\n/)) {
           const [name, cpu, mem] = line.split(",");
           if (!name?.startsWith("dancesync")) continue;
-          rows.push({ name, cpu: parseFloat(cpu), memMiB: parseFloat(mem) * (/GiB/.test(mem) ? 1024 : 1) });
+          rows.push({ name, cpu: parseFloat(cpu), memMiB: toMiB(mem) });
         }
         resolve(rows);
       },
