@@ -1,4 +1,5 @@
 import type { AuthIdentity } from "../../application/auth/AuthIdentity.js";
+import type { RateLimitedPayload } from "../abuse/eventRateLimit.js";
 import type { ChatMessage } from "../../domain/model/ChatMessage.js";
 import type { RoomDto } from "../serialization/roomDto.js";
 import type { SubmitWordOutcome } from "../../domain/model/WordRace.js";
@@ -36,6 +37,8 @@ export const ServerEvents = {
   ROOM_KICKED: "room:kicked",
   VOTE_MINE: "vote:mine",
   ERROR: "error:domain",
+  /** SEG-3: the connection sent events faster than allowed and some were dropped. */
+  RATE_LIMITED: "rate:limited",
 } as const;
 
 /**
@@ -261,6 +264,7 @@ export interface ServerToClientEvents {
   [ServerEvents.ROOM_KICKED]: (payload: RoomKickedPayload) => void;
   [ServerEvents.VOTE_MINE]: (payload: VoteMinePayload) => void;
   [ServerEvents.ERROR]: (error: DomainErrorPayload) => void;
+  [ServerEvents.RATE_LIMITED]: (payload: RateLimitedPayload) => void;
 }
 
 export interface SocketData {

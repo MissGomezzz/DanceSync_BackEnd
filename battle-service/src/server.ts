@@ -33,6 +33,8 @@ import { StopWordRace } from "./application/usecases/StopWordRace.js";
 import { SubmitWord } from "./application/usecases/SubmitWord.js";
 import { GetActiveWordRound } from "./application/usecases/GetActiveWordRound.js";
 import { createStateStores } from "./infrastructure/redis/stateStores.js";
+import { loadAbuseConfig } from "./infrastructure/abuse/abuseConfig.js";
+import { attachEventRateLimit } from "./infrastructure/abuse/eventRateLimit.js";
 import { WordRaceScheduler } from "./infrastructure/scheduling/WordRaceScheduler.js";
 import { createSocketWordRaceBroadcaster } from "./infrastructure/ws/wordRaceMessages.js";
 
@@ -93,6 +95,8 @@ const io: BattleServer = new Server(httpServer, {
   cors: { origin: env.corsOrigin, credentials: true },
 });
 stateStores.attachAdapter(io);
+// SEG-3: every connection's events go through a token bucket before any handler.
+attachEventRateLimit(io, loadAbuseConfig());
 const wordRaceScheduler = new WordRaceScheduler({
   startWordRace: new StartWordRace(rooms, wordRaces, {
     rounds: env.wordRaceRounds,
