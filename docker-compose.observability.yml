@@ -151,7 +151,10 @@ services:
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
     environment:
-      DATA_SOURCE_NAME: postgresql://dancesync:${POSTGRES_PASSWORD:-dancesync}@postgres:5432/dancesync?sslmode=disable
+      # The credentials travel as separate variables, not inside a connection URL.
+      DATA_SOURCE_URI: postgres:5432/dancesync?sslmode=disable
+      DATA_SOURCE_USER: dancesync
+      DATA_SOURCE_PASS: ${POSTGRES_PASSWORD:-dancesync}
     depends_on:
       postgres:
         condition: service_healthy
