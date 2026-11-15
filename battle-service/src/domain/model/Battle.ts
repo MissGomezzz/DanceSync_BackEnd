@@ -84,4 +84,11 @@ export interface Battle {
   endReason: BattleEndReason | null;
   /** Set when the battle finishes; null while it runs. */
   result: BattleResult | null;
+  /**
+   * Correlation id of the request that started the battle (OBS-1). Timer-driven
+   * steps (word rounds, the finish) and the match sent to the history carry it,
+   * so a whole battle can be followed through every service. Absent on battles
+   * started before it existed.
+   */
+  correlationId?: string;
 }

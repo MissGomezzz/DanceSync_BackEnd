@@ -48,6 +48,7 @@ export const MatchRecordService = {
       winnerPlayerId: battle.result.winnerId,
       endReason: battle.endReason,
       participants: [...dancers, ...spectators],
+      ...(battle.correlationId ? { correlationId: battle.correlationId } : {}),
     };
   },
 };

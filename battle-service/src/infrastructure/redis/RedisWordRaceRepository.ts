@@ -83,6 +83,8 @@ interface RaceMeta {
   participantIds: string[];
   participantNames: Record<string, string>;
   rounds: Array<{ id: string; number: number; word: string; opensAt: number; closesAt: number }>;
+  /** OBS-1; absent on races planned before it existed. */
+  correlationId?: string;
 }
 
 type ScriptReply = [applied: number, status: string | null, winner: string | null, meta: string | null];
@@ -115,6 +117,7 @@ export class RedisWordRaceRepository implements WordRaceRepository {
         opensAt: r.opensAt.getTime(),
         closesAt: r.closesAt.getTime(),
       })),
+      ...(race.correlationId ? { correlationId: race.correlationId } : {}),
     };
     const fields: Record<string, string> = { meta: JSON.stringify(meta) };
     for (const round of race.rounds) {
@@ -144,6 +147,7 @@ export class RedisWordRaceRepository implements WordRaceRepository {
       participantNames: meta.participantNames,
       rounds: meta.rounds.map((r) => toRound(meta, r.id, (fields[`s:${r.id}`] ?? "scheduled") as WordRoundStatus, fields[`w:${r.id}`] ?? null)!),
       wins,
+      ...(meta.correlationId ? { correlationId: meta.correlationId } : {}),
     };
   }
 

@@ -10,6 +10,8 @@ export interface StartBattleInput {
   requesterId: string;
   /** Overrides the dancers chosen through role:select; at least MIN_DANCERS_PER_BATTLE ids. */
   dancerIds?: string[];
+  /** Correlation id of the start request, kept in the battle (OBS-1). */
+  correlationId?: string;
 }
 
 /** Battle timing injected from the configuration (config/env.ts); `now` is taken per command. */
@@ -26,7 +28,11 @@ export class StartBattle {
       if (room.hostId !== input.requesterId) {
         throw new DomainError("NOT_HOST", "Only the host can start the battle");
       }
-      return RoomService.startBattle(room, input.dancerIds, { ...this.timing, now: new Date() });
+      return RoomService.startBattle(room, input.dancerIds, {
+        ...this.timing,
+        now: new Date(),
+        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+      });
     });
   }
 }

@@ -1,9 +1,11 @@
+import type { LogFields, Logger } from "../../application/ports/Logger.js";
 import type { ExpireWordRound } from "../../application/usecases/ExpireWordRound.js";
 import type { OpenWordRound } from "../../application/usecases/OpenWordRound.js";
 import type { ResumeWordRace } from "../../application/usecases/ResumeWordRace.js";
 import type { StartWordRace } from "../../application/usecases/StartWordRace.js";
 import type { StopWordRace } from "../../application/usecases/StopWordRace.js";
 import type { WordRace, WordRound } from "../../domain/model/WordRace.js";
+import { rootLogger } from "../logging/logger.js";
 
 /** Outbound port used to tell the room that a round started or ended. */
 export interface WordRaceBroadcaster {
@@ -27,6 +29,8 @@ export interface WordRaceSchedulerDependencies {
    * behind this one; without a floor the retry would spin. Default 50 ms.
    */
   retryDelayMs?: number;
+  /** Structured logs (OBS-1). Default: the process logger. */
+  logger?: Logger;
 }
 
 const DEFAULT_RETRY_DELAY_MS = 50;
@@ -46,6 +50,7 @@ export class WordRaceScheduler {
   private readonly deps: WordRaceSchedulerDependencies;
   private readonly clock: () => Date;
   private readonly retryDelayMs: number;
+  private readonly logger: Logger;
   /** Room (upper case) -> task ("open:<round>" / "expire:<round>") -> timer. One timer per task. */
   private readonly timers = new Map<string, Map<string, NodeJS.Timeout>>();
 
@@ -53,12 +58,14 @@ export class WordRaceScheduler {
     this.deps = deps;
     this.clock = deps.clock ?? (() => new Date());
     this.retryDelayMs = deps.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
+    this.logger = deps.logger ?? rootLogger;
   }
 
   /** Plans the race of a battle that just started and schedules every round opening. */
   async start(roomCode: string): Promise<WordRace> {
     this.clearTimers(roomCode);
     const race = await this.deps.startWordRace.execute({ roomCode });
+    this.logger.info({ ...raceFields(race), rounds: race.rounds.length }, "Word race planned");
     this.arm(race);
     return race;
   }
@@ -115,6 +122,7 @@ export class WordRaceScheduler {
       if (result.reason === "battle-over") await this.stop(roomCode);
       return;
     }
+    this.logger.info({ ...raceFields(result.race), roundId }, "Word round opened");
     this.deps.broadcaster.roundStarted(result.race, result.round, this.clock());
     this.schedule(roomCode, `expire:${roundId}`, result.round.closesAt, () => this.expire(roomCode, roundId));
   }
@@ -122,6 +130,7 @@ export class WordRaceScheduler {
   private async expire(roomCode: string, roundId: string): Promise<void> {
     const result = await this.deps.expireWordRound.execute({ roomCode, roundId });
     if (result.expired) {
+      this.logger.info({ ...raceFields(result.race), roundId, outcome: "expired" }, "Word round ended");
       this.deps.broadcaster.roundEnded(result.race, result.round);
     } else if (result.round?.status === "open") {
       // Fired before closesAt as the store sees it (timer drift, or the store's
@@ -139,7 +148,7 @@ export class WordRaceScheduler {
     const delay = Math.max(minDelayMs, at.getTime() - this.clock().getTime());
     const timer = setTimeout(() => {
       tasks.delete(task);
-      run().catch((error: unknown) => console.error("Word race timer failed", error));
+      run().catch((error: unknown) => this.logger.error({ roomId: roomCode, task, err: error }, "Word race timer failed"));
     }, delay);
     // A pending round must never keep a stopping process alive.
     timer.unref();
@@ -152,4 +161,9 @@ export class WordRaceScheduler {
     if (tasks) for (const timer of tasks.values()) clearTimeout(timer);
     this.timers.delete(key);
   }
+}
+
+/** Room, battle and the battle's correlation id (OBS-1) of a race's log lines. */
+function raceFields(race: WordRace): LogFields {
+  return { roomId: race.roomCode, battleId: race.battleId, ...(race.correlationId ? { correlationId: race.correlationId } : {}) };
 }

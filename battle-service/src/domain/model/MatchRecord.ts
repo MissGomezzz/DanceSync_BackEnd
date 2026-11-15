@@ -34,4 +34,9 @@ export interface MatchRecord {
   winnerPlayerId: string | null;
   endReason: BattleEndReason;
   participants: MatchParticipantRecord[];
+  /**
+   * The battle's correlation id (OBS-1). Not part of the stored document: the
+   * publisher sends it as the X-Correlation-Id header of the request.
+   */
+  correlationId?: string;
 }

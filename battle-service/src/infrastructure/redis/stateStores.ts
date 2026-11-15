@@ -1,6 +1,7 @@
 import { createAdapter } from "@socket.io/redis-adapter";
 import { Redis } from "ioredis";
 import type { Server } from "socket.io";
+import type { Logger } from "../../application/ports/Logger.js";
 import type { MatchOutbox } from "../../domain/ports/MatchOutbox.js";
 import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
 import type { WordRaceRepository } from "../../domain/ports/WordRaceRepository.js";
@@ -8,6 +9,7 @@ import { InMemoryBlockList, type BlockList } from "../abuse/blockList.js";
 import { InMemoryMatchOutbox } from "../persistence/InMemoryMatchOutbox.js";
 import { InMemoryRoomRepository } from "../persistence/InMemoryRoomRepository.js";
 import { InMemoryWordRaceRepository } from "../persistence/InMemoryWordRaceRepository.js";
+import { rootLogger } from "../logging/logger.js";
 import { RedisBlockList } from "./RedisBlockList.js";
 import { RedisMatchOutbox } from "./RedisMatchOutbox.js";
 import { RedisRoomRepository } from "./RedisRoomRepository.js";
@@ -35,9 +37,15 @@ export interface StateStores {
   close(): Promise<void>;
 }
 
-export function createStateStores(config: RedisConfig = loadRedisConfig()): StateStores {
+export interface StateStoreOptions {
+  /** Default: the process logger. */
+  logger?: Logger;
+}
+
+export function createStateStores(config: RedisConfig = loadRedisConfig(), options: StateStoreOptions = {}): StateStores {
+  const logger = options.logger ?? rootLogger;
   if (config.url === "") {
-    console.log("State store: in memory (single instance). Set REDIS_URL to share it between instances.");
+    logger.info({ stateStore: "memory" }, "State store: in memory (single instance). Set REDIS_URL to share it between instances.");
     return {
       mode: "memory",
       rooms: new InMemoryRoomRepository(),
@@ -50,12 +58,13 @@ export function createStateStores(config: RedisConfig = loadRedisConfig()): Stat
     };
   }
 
-  const redis = connect(config.url, "state");
+  const redis = connect(config.url, "state", logger);
   // The adapter needs its own publisher and subscriber connections.
   const pub = redis.duplicate();
   const sub = redis.duplicate();
-  for (const [name, client] of [["pub", pub], ["sub", sub]] as const) client.on("error", logRedisError(name));
-  console.log(`State store: Redis at ${describeRedisUrl(config.url)} (Socket.IO adapter key "${config.adapterKey}")`);
+  for (const [name, client] of [["pub", pub], ["sub", sub]] as const) client.on("error", logRedisError(name, logger));
+  // describeRedisUrl never includes the password.
+  logger.info({ stateStore: "redis", redis: describeRedisUrl(config.url), adapterKey: config.adapterKey }, "State store: Redis");
 
   return {
     mode: "redis",
@@ -79,12 +88,13 @@ export function createStateStores(config: RedisConfig = loadRedisConfig()): Stat
   };
 }
 
-function connect(url: string, name: string): Redis {
+function connect(url: string, name: string, logger: Logger): Redis {
   const client = new Redis(url);
-  client.on("error", logRedisError(name));
+  client.on("error", logRedisError(name, logger));
   return client;
 }
 
-function logRedisError(name: string) {
-  return (error: Error) => console.error(`Redis connection "${name}" error: ${error.message}`);
+function logRedisError(name: string, logger: Logger) {
+  // The message only: an ioredis error may carry the connection options.
+  return (error: Error) => logger.error({ connection: name, reason: error.message }, "Redis connection error");
 }

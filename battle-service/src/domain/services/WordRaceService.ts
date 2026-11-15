@@ -83,7 +83,15 @@ export const WordRaceService = {
       wins[id] = 0;
     }
 
-    return { roomCode: room.code, battleId: battle.id, participantIds, participantNames, rounds: wordRounds, wins };
+    return {
+      roomCode: room.code,
+      battleId: battle.id,
+      participantIds,
+      participantNames,
+      rounds: wordRounds,
+      wins,
+      ...(battle.correlationId ? { correlationId: battle.correlationId } : {}),
+    };
   },
 
   /**

@@ -1,4 +1,6 @@
 import type { Server, Socket } from "socket.io";
+import type { Logger } from "../../application/ports/Logger.js";
+import { rootLogger } from "../logging/logger.js";
 import type { AbuseAuditLog, AbuseIncident } from "./abuseAudit.js";
 import type { AbuseConfig } from "./abuseConfig.js";
 import type { BlockList } from "./blockList.js";
@@ -22,6 +24,8 @@ export interface AbuseProtectionDependencies {
   blocks: BlockList;
   audit: AbuseAuditLog;
   now?: Clock;
+  /** Operational errors (not incidents, those go to `audit`). Default: the process logger. */
+  logger?: Logger;
 }
 
 interface ConnectionState {
@@ -51,6 +55,7 @@ const LOG_INTERVAL_MS = 1000;
  */
 export function attachAbuseProtection(io: Server<any, any, any, any>, deps: AbuseProtectionDependencies): void {
   const { config, blocks, audit } = deps;
+  const logger = deps.logger ?? rootLogger;
   const now = deps.now ?? Date.now;
   const windowMs = config.strikeWindowSeconds * 1000;
   const blockMs = config.blockSeconds * 1000;
@@ -94,7 +99,7 @@ export function attachAbuseProtection(io: Server<any, any, any, any>, deps: Abus
         next(refusal);
       },
       (error: unknown) => {
-        console.error("Could not read the abuse block list; accepting the connection", error);
+        logger.error({ correlationId: socket.data.correlationId, err: error }, "Could not read the abuse block list; accepting the connection");
         next();
       },
     );
@@ -133,7 +138,7 @@ export function attachAbuseProtection(io: Server<any, any, any, any>, deps: Abus
     try {
       await blocks.block(keysOf(socket), blockMs);
     } catch (error) {
-      console.error("Could not store an abuse block; disconnecting the client anyway", error);
+      logger.error({ correlationId: socket.data.correlationId, err: error }, "Could not store an abuse block; disconnecting the client anyway");
     }
     audit.blocked(incident(socket, { blockedForMs: blockMs }));
     const notice: RateBlockedPayload = { code: BLOCKED, retryAfterMs: blockMs };

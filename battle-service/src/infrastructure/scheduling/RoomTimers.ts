@@ -1,3 +1,6 @@
+import type { Logger } from "../../application/ports/Logger.js";
+import { rootLogger } from "../logging/logger.js";
+
 /** What a room timer is for; at most one timer of each kind per room. */
 export type RoomTimerKind = "song-challenge" | "song-choose" | "battle-end";
 
@@ -13,7 +16,10 @@ export type RoomTimerKind = "song-challenge" | "song-choose" | "battle-end";
 export class RoomTimers {
   private readonly timers = new Map<string, NodeJS.Timeout>();
 
-  constructor(private readonly clock: () => Date = () => new Date()) {}
+  constructor(
+    private readonly clock: () => Date = () => new Date(),
+    private readonly logger: Logger = rootLogger,
+  ) {}
 
   /** (Re)schedules the `kind` timer of a room at `at`; a passed deadline fires right away. */
   set(roomCode: string, kind: RoomTimerKind, at: Date, task: () => Promise<void>): void {
@@ -22,7 +28,7 @@ export class RoomTimers {
     const delay = Math.max(0, at.getTime() - this.clock().getTime());
     const timer = setTimeout(() => {
       if (this.timers.get(key) === timer) this.timers.delete(key);
-      task().catch((error: unknown) => console.error(`Room timer ${key} failed`, error));
+      task().catch((error: unknown) => this.logger.error({ roomId: roomCode, timer: kind, err: error }, "Room timer failed"));
     }, delay);
     timer.unref();
     this.timers.set(key, timer);
