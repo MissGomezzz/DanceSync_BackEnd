@@ -17,6 +17,12 @@ export interface RedisConfig {
   readonly maxUpdateAttempts: number;
   /** Prefix of the Socket.IO adapter channels; instances must share it. */
   readonly adapterKey: string;
+  /**
+   * How long a cross-instance request (fetchSockets, ...) waits for the other
+   * instances (DIS-1): a replica that hangs must not stall a join for the
+   * adapter's 5 s default.
+   */
+  readonly adapterRequestsTimeoutMs: number;
 }
 
 function readPositiveInteger(source: Source, name: string, fallback: number): number {
@@ -39,6 +45,7 @@ export function loadRedisConfig(source: Source = process.env): RedisConfig {
     ttlSeconds: readPositiveInteger(source, "REDIS_STATE_TTL_SECONDS", 86_400),
     maxUpdateAttempts: readPositiveInteger(source, "REDIS_UPDATE_MAX_ATTEMPTS", 12),
     adapterKey: source.SOCKETIO_REDIS_KEY?.trim() || "dancesync",
+    adapterRequestsTimeoutMs: readPositiveInteger(source, "REDIS_ADAPTER_REQUESTS_TIMEOUT_MS", 1_500),
   };
 }
 

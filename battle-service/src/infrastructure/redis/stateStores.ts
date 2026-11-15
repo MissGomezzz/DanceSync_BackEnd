@@ -30,6 +30,8 @@ export interface StateStores {
   readonly matchOutbox: MatchOutbox;
   /** Makes io.to(room).emit and io.in(room).fetchSockets() span every instance. */
   attachAdapter(io: Server<any, any, any, any>): void;
+  /** Resolves when the store answers (readiness probe, DIS-1); rejects otherwise. */
+  ping(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -43,6 +45,7 @@ export function createStateStores(config: RedisConfig = loadRedisConfig()): Stat
       blocks: new InMemoryBlockList(),
       matchOutbox: new InMemoryMatchOutbox(),
       attachAdapter() {},
+      async ping() {},
       async close() {},
     };
   }
@@ -62,7 +65,13 @@ export function createStateStores(config: RedisConfig = loadRedisConfig()): Stat
     // A delivered match is remembered at least as long as a finished room can live (its TTL), twice to be safe.
     matchOutbox: new RedisMatchOutbox(redis, { deliveredRetentionSeconds: config.ttlSeconds * 2 }),
     attachAdapter(io) {
-      io.adapter(createAdapter(pub, sub, { key: config.adapterKey }));
+      // requestsTimeout bounds fetchSockets and friends when a replica stops
+      // answering (DIS-1): the request fails fast instead of holding a join.
+      io.adapter(createAdapter(pub, sub, { key: config.adapterKey, requestsTimeout: config.adapterRequestsTimeoutMs }));
+    },
+    async ping() {
+      const reply = await redis.ping();
+      if (reply !== "PONG") throw new Error(`unexpected PING reply from Redis: ${reply}`);
     },
     async close() {
       await Promise.allSettled([redis.quit(), pub.quit(), sub.quit()]);

@@ -95,7 +95,7 @@ const extraConnections: Redis[] = [];
 const outboxNamespace = `test-outbox-${randomUUID().slice(0, 8)}`;
 
 async function startReplica(name: string, extra: Partial<SocketDependencies> = {}): Promise<Replica> {
-  const stores = createStateStores({ url: TEST_REDIS_URL!, ttlSeconds: 300, maxUpdateAttempts: 25, adapterKey });
+  const stores = createStateStores({ url: TEST_REDIS_URL!, ttlSeconds: 300, maxUpdateAttempts: 25, adapterKey, adapterRequestsTimeoutMs: 1_500 });
   const { rooms, wordRaces: races } = stores;
   const http = createServer();
   const io: BattleServer = new Server(http, { path: "/socket.io" });

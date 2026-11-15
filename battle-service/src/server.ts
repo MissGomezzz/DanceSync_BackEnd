@@ -95,6 +95,9 @@ const httpServer = createServer(app);
 const io: BattleServer = new Server(httpServer, {
   path: "/socket.io",
   cors: { origin: env.corsOrigin, credentials: true },
+  // DIS-1: detect a dead connection (and so a dead replica) in seconds.
+  pingInterval: env.socketPingIntervalMs,
+  pingTimeout: env.socketPingTimeoutMs,
 });
 stateStores.attachAdapter(io);
 const wordRaceScheduler = new WordRaceScheduler({
@@ -133,6 +136,7 @@ const socketHandlers = registerSocketHandlers(io, {
   reapRooms: new ReapRooms(rooms),
   disconnectGraceMs: env.disconnectGraceMs,
   pagehideGraceMs: env.pagehideGraceMs,
+  reaping: { sweepIntervalMs: env.roomSweepIntervalMs },
   wordRace: {
     scheduler: wordRaceScheduler,
     submitWord: new SubmitWord(wordRaces),
@@ -158,6 +162,7 @@ app.use(
     onRoomCreated: (room) => socketHandlers.watchNewRoom(room.code, room.hostId),
     leaveRoom: (roomCode, playerId) => socketHandlers.leave(roomCode, playerId),
     leaveAfterPagehide: (roomCode, playerId) => socketHandlers.leaveAfterPagehide(roomCode, playerId),
+    readiness: () => stateStores.ping(),
   }),
 );
 app.use(errorHandler);

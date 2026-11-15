@@ -422,44 +422,62 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    * normal leave path, which also finishes a battle the departure ends),
    * deletes rooms left empty, and re-arms each room's deadlines, which settles
    * any deadline whose timer did not run.
+   *
+   * DIS-1: every replica runs it, so it also takes over what a dead replica
+   * left behind (word races, undelivered match results), and one room that
+   * fails (e.g. an adapter request timing out) never stops the others.
    */
   async function sweep(): Promise<void> {
     const now = Date.now();
     const seen = new Set<string>();
+    // Rooms whose timers this replica armed before listing: those missing from
+    // the list were deleted elsewhere, and their timers can go.
+    const armedBefore = [...armedVersions.keys()];
+    const listed = new Set<string>();
     for (const room of await deps.reapRooms.list()) {
-      // DIS-1: a finisher that died before enqueuing its result leaves it to this sweep.
-      if (room.status === "finished") await deps.recordMatchResult?.enqueueFinished(room);
-      if (room.players.length === 0) {
-        if (await deps.reapRooms.deleteIfEmpty(room.code)) {
-          await announceLeave(room.code, { room: null, battleFinished: false, discardedVoterIds: [] });
-        }
-        continue;
-      }
-      armRoomTimers(room);
-      if (room.status === "battling") await resumeWordRace(room.code);
-      const bound = new Set((await io.in(room.code).fetchSockets()).map((s) => s.data.playerId));
-      for (const player of room.players) {
-        const key = seatKey(room.code, player.id);
-        seen.add(key);
-        if (bound.has(player.id)) {
-          unboundSince.delete(key);
-          continue;
-        }
-        // A pending grace or new-room timer will decide this seat on its own.
-        if (graceTimers.has(key) || newRoomTimers.has(key)) continue;
-        const since = unboundSince.get(key);
-        if (since === undefined) {
-          unboundSince.set(key, now);
-        } else if (now - since >= deps.disconnectGraceMs) {
-          unboundSince.delete(key);
-          await releaseSeatIfAbandoned(room.code, player.id);
-        }
+      listed.add(room.code.toUpperCase());
+      for (const player of room.players) seen.add(seatKey(room.code, player.id));
+      try {
+        await sweepRoom(room, now);
+      } catch (error) {
+        console.error(`Error sweeping room ${room.code}`, error);
       }
     }
+    for (const key of armedBefore) if (!listed.has(key)) forgetRoomTimers(key);
     // Forget seats that no longer exist.
     for (const key of unboundSince.keys()) if (!seen.has(key)) unboundSince.delete(key);
     // DIS-1: every replica delivers the results still pending, whoever finished the battle.
     await deps.recordMatchResult?.drain();
+  }
+
+  async function sweepRoom(room: Room, now: number): Promise<void> {
+    // DIS-1: a finisher that died before enqueuing its result leaves it to this sweep.
+    if (room.status === "finished") await deps.recordMatchResult?.enqueueFinished(room);
+    if (room.players.length === 0) {
+      if (await deps.reapRooms.deleteIfEmpty(room.code)) {
+        await announceLeave(room.code, { room: null, battleFinished: false, discardedVoterIds: [] });
+      }
+      return;
+    }
+    armRoomTimers(room);
+    if (room.status === "battling") await resumeWordRace(room.code);
+    const bound = new Set((await io.in(room.code).fetchSockets()).map((s) => s.data.playerId));
+    for (const player of room.players) {
+      const key = seatKey(room.code, player.id);
+      if (bound.has(player.id)) {
+        unboundSince.delete(key);
+        continue;
+      }
+      // A pending grace or new-room timer will decide this seat on its own.
+      if (graceTimers.has(key) || newRoomTimers.has(key)) continue;
+      const since = unboundSince.get(key);
+      if (since === undefined) {
+        unboundSince.set(key, now);
+      } else if (now - since >= deps.disconnectGraceMs) {
+        unboundSince.delete(key);
+        await releaseSeatIfAbandoned(room.code, player.id);
+      }
+    }
   }
 
   /** Joining as someone else or somewhere else first releases the seat bound so far. */
