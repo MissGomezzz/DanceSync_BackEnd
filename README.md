@@ -402,13 +402,17 @@ Every run met the four measures: service restored in at most 6.2 s (target < 30 
 
 The runs while the harness was being written found a real defect, now fixed (reports `before-fix-*`): the new-room deadline, which runs 20 s after `POST /api/rooms` on the replica that served it, released the host's seat when no socket was bound at that instant. If a replica died just before, the host was reconnecting: the seat was released, the host's rejoin failed with `ROOM_NOT_WAITING` and the battle ended early with one dancer (`before-fix-failover-smoke`: 0/2 rooms intact). That deadline now only reaps a room the host never used, and the sweep no longer counts a gap in its observations as time without a socket. Two early runs also failed while the test machine stalled (one of them, `before-fix-failover-140u`, with a Redis snapshot taking 12 s instead of under 1 s, 12 clients disconnected before the kill and 5/20 rooms intact); the harness now runs `docker` asynchronously (a synchronous call froze every bot) and reports the load generator's event loop delay, and every seat release is logged with its cause. A run with 210 users (30 rooms, 105 clients failed over, before that fix) also passed: max 9.9 s, 30/30 rooms.
 
-**Azure checklist (still to configure)**
+**Azure configuration** (resource group `rg-dancesync`, environment `cae-dancesync`)
 
-- [ ] battle-service Container App with `minReplicas: 2` (and a scale rule that keeps at least two)
-- [ ] Liveness probe `GET /api/battles/health` and readiness probe `GET /api/battles/health/ready` (period about 5 s, failure threshold 2, timeout 1 s)
-- [ ] `REDIS_URL` as a secret pointing to Azure Cache for Redis (`rediss://`), the same for every replica
-- [ ] Ingress without session affinity (`stickySessions: none`), WebSocket transport
-- [ ] `USERS_SERVICE_URL` pointing to users-service, which must stay reachable from battle-service for the outbox to drain
+- [x] `redis` Container App (`redis:7-alpine` imported into the ACR): internal TCP ingress on 6379, password from a Container Apps secret, 0.25 vCPU / 0.5 GiB, 1 replica, no persistence. Azure Cache for Redis was left out for cost and provisioning time; the trade-off is a single Redis replica (see ADR-06)
+- [x] battle-service with `minReplicas: 2` / `maxReplicas: 2`; `REDIS_URL` (`redis://`, internal traffic only) as a secret, the same for every replica
+- [x] Liveness and readiness HTTP probes on `GET /api/battles/health` (period 5 s; liveness failure threshold 3, readiness 2) and a TCP startup probe
+- [ ] Readiness probe on `GET /api/battles/health/ready` once this branch is deployed (the deployed image does not have that endpoint yet)
+- [x] Ingress without session affinity, WebSocket transport
+- [x] `USERS_SERVICE_URL` pointing to users-service, reachable from battle-service for the outbox to drain
+- [x] `GUEST_TOKEN_SECRET` as a secret (`secretref`) in api-gateway and battle-service
+
+Turn the setup on before a demo and off afterwards with [`scripts/azure-availability.ps1`](scripts/azure-availability.ps1) (`up`, `down`, `status`; `-IncludePostgres` also starts or stops PostgreSQL). With `down`, battle-service and Redis scale to zero, so no compute is billed.
 
 ## Abuse and denial-of-service protection (SEG-3)
 
