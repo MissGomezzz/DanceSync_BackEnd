@@ -1,0 +1,50 @@
+# DIS-1 failover environment: the scale environment (Redis + 2 battle-service replicas + nginx)
+# plus users-service with its own throwaway PostgreSQL, so finished matches really reach a database.
+# It never touches the development database of docker-compose.yml (no volume, no host port).
+#
+# Always with its own project name and, if the scale environment may be running, other host ports:
+#   BATTLE_1_PORT=13001 BATTLE_2_PORT=13002 LB_PORT=18088 \
+#   docker compose -p dis1test -f docker-compose.scale.yml -f docker-compose.failover.yml up -d --build
+#
+# load-tests/scripts/failover.mjs starts it, plays 20 rooms / 140 users, kills a replica and measures.
+services:
+  failover-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: dancesync
+      POSTGRES_USER: dancesync
+      POSTGRES_PASSWORD: dancesync
+    # Throwaway data: gone when the container is removed.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dancesync -d dancesync"]
+      interval: 3s
+      timeout: 2s
+      retries: 20
+
+  users-service:
+    build: ./users-service
+    environment:
+      POSTGRES_HOST: failover-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: dancesync
+      POSTGRES_USER: dancesync
+      POSTGRES_PASSWORD: dancesync
+    depends_on:
+      failover-postgres:
+        condition: service_healthy
+
+  battle-1:
+    container_name: dancesync-failover-battle-1
+    environment:
+      # Finished matches go to the users-service above (PUT /api/matches/{battleId}).
+      USERS_SERVICE_URL: http://users-service:8081
+
+  battle-2:
+    container_name: dancesync-failover-battle-2
+    environment:
+      USERS_SERVICE_URL: http://users-service:8081
+
+  nginx:
+    container_name: dancesync-failover-lb
