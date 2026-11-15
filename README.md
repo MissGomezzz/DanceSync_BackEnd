@@ -157,7 +157,7 @@ The images do not run the tests: CI does, and only commits that passed CI are de
 
 - `api-gateway`: `./mvnw -B verify`
 - `users-service`: `./mvnw -B verify` against a PostgreSQL 16 service container
-- `battle-service`: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build`
+- `battle-service`: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build`, with a Redis 7 service container and `TEST_REDIS_URL`, so the shared-state tests run too
 
 ## CD (Azure Container Apps)
 
@@ -322,7 +322,7 @@ Rooms hold at most 7 players. Display names are trimmed, 1-32 characters, and un
 - `test/stateStores.contract.test.ts`: the same contract for the in-memory and the Redis implementations of both ports (concurrent joins that provoke real optimistic-lock conflicts and lose nothing, 100 simultaneous claims with one winner, claim against expiry).
 - `test/twoReplicas.socket.test.ts`: two battle-service instances sharing one Redis play a whole battle with the players split between them (broadcasts cross instances, one winner per round, each round end seen once, wins scored once). Its negative control is removing the adapter: the test then fails.
 
-The Redis tests run only when `TEST_REDIS_URL` points to a disposable Redis (`docker run --rm -p 6379:6379 redis:7`, then `TEST_REDIS_URL=redis://localhost:6379 pnpm test`); they touch only their own keys. Without it they are skipped.
+The Redis tests run only when `TEST_REDIS_URL` points to a disposable Redis (`docker run --rm -p 6379:6379 redis:7`, then `TEST_REDIS_URL=redis://localhost:6379 pnpm test`); they touch only their own keys. Without it they are skipped. CI provides one, so they run on every pull request.
 
 Run them with `pnpm test` (all tests) or, for example, `npx tsx --test test/room.concurrency.test.ts`.
 
@@ -332,7 +332,7 @@ The `webrtc:*` events are a thin signaling relay for the dancers' live cameras (
 
 Quality scenario REN-1 is documented, with its results and evidence, in [docs/quality/REN-1-rendimiento-latencia.md](docs/quality/REN-1-rendimiento-latencia.md); the decisions behind it are [ADR-01](docs/adr/ADR-01-estado-en-redis.md) and [ADR-02](docs/adr/ADR-02-balanceador-solo-websocket.md). In short:
 
-- **Several replicas.** With `REDIS_URL`, the room and word race state lives in Redis and the Socket.IO Redis adapter carries broadcasts between replicas, so any replica can serve any connection and no session affinity is needed (clients connect over WebSocket only).
+- **Several replicas.** With `REDIS_URL`, the room and word race state lives in Redis and the Socket.IO Redis adapter carries broadcasts between replicas, so any replica can serve any connection and no session affinity is needed (clients connect over WebSocket from the start and fall back to long-polling only when WebSocket is unavailable).
 - **Scale environment.** [`docker-compose.scale.yml`](docker-compose.scale.yml) starts Redis, two replicas with the same CPU and memory limit (`BATTLE_CPUS`, `BATTLE_MEMORY`), nginx as the load balancer on `http://localhost:8088` (`LB_REPLICAS=1` or `2` replicas receive traffic) and a fake Entra ID used only by the load tests.
 - **Load tests.** [`load-tests/`](load-tests/README.md) (Artillery) plays complete 7-player rooms and measures latency from the client: nominal load (140 users, 10 min) and a stress ramp to compare 1 and 2 replicas.
 - **Results.** 140 users with 2 replicas: chat p95 16.9 ms, vote p95 29.7 ms, 0 errors (target p95 <= 300 ms, < 1 % errors). Stress, 0.5 CPU per replica: 1 replica sustains 238 users and 2 replicas 427 (x1.79) at p95 <= 300 ms, with no duplicated or lost scores even when saturated.
@@ -352,4 +352,4 @@ Quality scenario SEG-1 is documented, with its tests and evidence, in [docs/qual
 - **Authentication, next steps**: `users-service` still trusts the network (it is only reachable through the gateway and from `battle-service`); making it a resource server and linking `users.external_id` to the Entra ID object id are future work.
 - **Payments**: dedicated payments service behind the gateway; provider to be decided.
 - **Match history UI**: the `GET /api/matches` endpoints exist (HU 21); a per-user history page is a future story.
-- **Horizontal scaling of battle-service, next steps**: the Redis state and the Socket.IO adapter are done (REN-1). Still to do: re-arm the round and battle timers of a replica that stops (DIS-1), run the Redis tests in CI, report Redis in the health endpoint, and deploy Azure Cache for Redis with two replicas in Azure Container Apps.
+- **Horizontal scaling of battle-service, next steps**: the Redis state and the Socket.IO adapter are done (REN-1). Still to do: re-arm the round and battle timers of a replica that stops (DIS-1), report Redis in the health endpoint, and deploy Azure Cache for Redis with two replicas in Azure Container Apps.

@@ -7,7 +7,7 @@ Implementación y evidencia del escenario de calidad REN-1 de DanceSync (Squad H
 | Estado | **Implementado y verificado en el prototipo local.** Falta repetir la medición a través del API Gateway y en Azure (ver [Lo que queda pendiente](#lo-que-queda-pendiente)) |
 | Repositorio | `DanceSync_BackEnd` (`battle-service`, `load-tests`, entorno de escala), rama `feat/rendimiento-latencia` |
 | Alcance | Estado compartido en Redis, varias réplicas del Battle Service detrás de un balanceador, y las pruebas de carga y estrés que lo verifican. `api-gateway` y `users-service` no se modificaron |
-| Decisiones | [ADR-01: estado de salas y rondas en Redis](../adr/ADR-01-estado-en-redis.md) · [ADR-02: balanceador y conexión solo por WebSocket](../adr/ADR-02-balanceador-solo-websocket.md) |
+| Decisiones | [ADR-01: estado de salas y rondas en Redis](../adr/ADR-01-estado-en-redis.md) · [ADR-02: balanceador y conexión por WebSocket sin afinidad](../adr/ADR-02-balanceador-solo-websocket.md) |
 
 ## Contenido
 
@@ -46,7 +46,7 @@ Implementación y evidencia del escenario de calidad REN-1 de DanceSync (Squad H
 
 ```mermaid
 flowchart LR
-    C[Clientes Socket.IO<br/>solo WebSocket] --> LB[Balanceador<br/>nginx least_conn]
+    C[Clientes Socket.IO<br/>WebSocket primero] --> LB[Balanceador<br/>nginx least_conn]
     LB --> B1[Battle Service<br/>réplica 1]
     LB --> B2[Battle Service<br/>réplica 2]
     B1 <-- "estado: Lua compare-and-set" --> R[(Redis 7)]
@@ -65,7 +65,7 @@ flowchart LR
 - **Implementar los puertos, no cambiar el dominio.** `RoomRepository` y `WordRaceRepository` ya definían las operaciones atómicas. Se agregaron `RedisRoomRepository` y `RedisWordRaceRepository` en `infrastructure/redis`; `domain` y `application` no cambiaron. Ver [ADR-01](../adr/ADR-01-estado-en-redis.md).
 - **Lua en lugar de `WATCH`/`MULTI`.** `WATCH` queda atado a una conexión, y el repositorio comparte una para todas las operaciones. Un script Lua se ejecuta de forma atómica dentro de Redis y da la misma garantía de compare-and-set sin conexiones dedicadas.
 - **Un contrato, dos implementaciones.** Las mismas pruebas se exigen a la versión en memoria y a la de Redis, incluida la concurrencia real con conflictos de versión provocados a propósito.
-- **Solo WebSocket, sin afinidad de sesión.** Con long-polling, cada petición de una sesión tendría que llegar a la misma réplica. Con WebSocket, la conexión vive en una sola réplica de principio a fin, así que el balanceador reparte libremente. Ver [ADR-02](../adr/ADR-02-balanceador-solo-websocket.md).
+- **WebSocket desde el inicio, sin afinidad de sesión.** Con long-polling, cada petición de una sesión tendría que llegar a la misma réplica. Con WebSocket, la conexión vive en una sola réplica de principio a fin, así que el balanceador reparte libremente. El frontend conecta por WebSocket directamente y deja long-polling solo como respaldo. Ver [ADR-02](../adr/ADR-02-balanceador-solo-websocket.md).
 - **Comparación justa.** Las dos réplicas tienen el mismo límite de CPU y memoria en todas las pruebas, y la prueba de 1 réplica usa la misma pila (Redis, adaptador y balanceador): lo único que cambia es cuántas réplicas reciben tráfico.
 - **La carga se autentica como un usuario real.** Desde SEG-1 el Battle Service exige token. Las pruebas no desactivan la autenticación: el anfitrión de cada sala usa un token con el formato de Entra ID firmado por un Entra ID simulado, y los demás entran como invitados. El costo de validar tokens queda incluido en las mediciones.
 
@@ -84,12 +84,25 @@ flowchart LR
 | `test/stateStores.contract.test.ts`, `test/twoReplicas.socket.test.ts`, `test/redisConfig.test.ts` | Contrato de ambos repositorios, batalla con dos réplicas y configuración |
 | `package.json` | Agrega `ioredis` y `@socket.io/redis-adapter` |
 
+### Frontend (`DanceSync_FrontEnd`)
+
+| Archivo | Qué hace |
+|---|---|
+| `src/shared/lib/socket.ts` | `transports: ['websocket', 'polling']` con `tryAllTransports: true`: WebSocket desde el inicio y long-polling solo si WebSocket falla (ADR-02) |
+| `src/shared/lib/socket.test.ts` | Fija esa configuración; falla con la anterior |
+
+### Pipeline
+
+| Archivo | Qué hace |
+|---|---|
+| `.github/workflows/backend-ci.yml` | El trabajo de `battle-service` levanta Redis 7 y define `TEST_REDIS_URL`, así que las pruebas de Redis corren en cada pull request |
+
 ### Entorno de escala y pruebas de carga
 
 | Archivo | Qué hace |
 |---|---|
 | `docker-compose.scale.yml` | Redis, Entra ID simulado, dos réplicas con el mismo límite de recursos y nginx en `http://localhost:8088` |
-| `load-balancer/nginx.conf`, `upstream-1.conf`, `upstream-2.conf` | Balanceador solo WebSocket, `least_conn`, verificación de salud pasiva; 1 o 2 réplicas reciben tráfico |
+| `load-balancer/nginx.conf`, `upstream-1.conf`, `upstream-2.conf` | Balanceador con actualización a WebSocket y conexiones largas, `least_conn`, verificación de salud pasiva y sin afinidad de sesión; 1 o 2 réplicas reciben tráfico |
 | `load-tests/lib/room-bot.cjs` | Cada usuario virtual de Artillery es una sala de 7 jugadores que juega el flujo real y mide latencias y correctitud |
 | `load-tests/lib/fake-entra.cjs`, `scripts/fake-entra.mjs` | Entra ID simulado (JWKS local) para que la carga se autentique |
 | `load-tests/scenarios/*.yml` | Humo, carga nominal y estrés |
@@ -134,7 +147,7 @@ Las credenciales de ese archivo son de prueba y solo sirven con el Entra ID simu
 | Suite | Comando | Resultado |
 |---|---|---|
 | `battle-service`, sin Redis | `pnpm test` | 277 pruebas, 277 pasan (las de Redis se omiten) |
-| `battle-service`, con Redis | `TEST_REDIS_URL=redis://localhost:6379 pnpm test` | 297 pruebas, 297 pasan |
+| `battle-service`, con Redis | `TEST_REDIS_URL=redis://localhost:6379 pnpm test` | 297 pruebas, 297 pasan. También en el pipeline: `backend-ci.yml` levanta un Redis y define `TEST_REDIS_URL` |
 | Tipos del servicio y de las pruebas | `pnpm typecheck` | Sin errores |
 
 Las pruebas de Redis exigen el mismo contrato a las dos implementaciones. Entre ellas: 6 jugadores uniéndose a la vez a una sala no pierden ninguna unión y sí provocan conflictos reales de versión; 100 envíos simultáneos de la palabra correcta producen exactamente un ganador y un solo punto. La prueba de dos réplicas juega una batalla completa con los jugadores repartidos entre dos instancias que solo comparten Redis. Su control negativo es quitar el adaptador: la prueba falla, porque una réplica ve 2 sockets de la sala en lugar de 4.
@@ -231,7 +244,7 @@ node scripts/chart.mjs ../docs/quality/ren-1/evidence/stress-estres-1-replica-20
 
 Texto para la sección "Estado actual" de REN-1 en el documento de escenarios:
 
-> **Implementado y verificado en el prototipo local.** Estado de salas y rondas en Redis, adaptador de Socket.IO entre réplicas y balanceador nginx con 2 réplicas del Battle Service. Con 140 usuarios durante 10 minutos, p95 de 16,9 ms (chat) y 29,7 ms (voto), 0 errores y sin pérdida ni duplicación de puntajes. En la prueba de estrés, con 0,5 CPU por réplica, 1 réplica sostiene 238 usuarios y 2 réplicas 427 con p95 ≤ 300 ms (×1,79). Pendientes: medir a través del API Gateway y en Azure, conexión solo por WebSocket en el frontend y pruebas con Redis en el pipeline.
+> **Implementado y verificado en el prototipo local.** Estado de salas y rondas en Redis, adaptador de Socket.IO entre réplicas, balanceador nginx con 2 réplicas del Battle Service y clientes que conectan por WebSocket desde el inicio. Con 140 usuarios durante 10 minutos, p95 de 16,9 ms (chat) y 29,7 ms (voto), 0 errores y sin pérdida ni duplicación de puntajes. En la prueba de estrés, con 0,5 CPU por réplica, 1 réplica sostiene 238 usuarios y 2 réplicas 427 con p95 ≤ 300 ms (×1,79). Las pruebas de Redis corren en el pipeline. Pendiente: medir a través del API Gateway y en Azure.
 
 ## Lo que queda pendiente
 
@@ -241,8 +254,6 @@ Texto para la sección "Estado actual" de REN-1 en el documento de escenarios:
 
 **Por hacer**
 
-- **Conexión solo por WebSocket en el frontend** (`transports: ['websocket']` en `shared/lib/socket.ts`). Hoy arranca con long-polling, que exigiría afinidad de sesión con varias réplicas (ADR-02).
-- **Pruebas con Redis en el pipeline.** El CI no tiene un servicio Redis, así que las 20 pruebas de Redis se omiten ahí. Hay que agregar `services: redis` y `TEST_REDIS_URL` al trabajo de `battle-service` en `backend-ci.yml`.
 - **Salud con Redis.** `GET /api/battles/health` no comprueba Redis; una réplica sin Redis debería salir de rotación.
 - **Despliegue.** `REDIS_URL` (como secreto), Azure Cache for Redis y al menos 2 réplicas en la Container App del Battle Service.
 
