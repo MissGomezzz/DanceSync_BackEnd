@@ -4,6 +4,7 @@ import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import { after, before, describe, it } from "node:test";
+import { Redis } from "ioredis";
 import { Server } from "socket.io";
 import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { AwardWordBonus } from "../src/application/usecases/AwardWordBonus.js";
@@ -17,6 +18,7 @@ import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
 import { KickPlayer } from "../src/application/usecases/KickPlayer.js";
 import { OpenWordRound } from "../src/application/usecases/OpenWordRound.js";
 import { ReapRooms } from "../src/application/usecases/ReapRooms.js";
+import { RecordMatchResult } from "../src/application/usecases/RecordMatchResult.js";
 import { SelectRole } from "../src/application/usecases/SelectRole.js";
 import { SendChatMessage } from "../src/application/usecases/SendChatMessage.js";
 import { SetReady } from "../src/application/usecases/SetReady.js";
@@ -28,11 +30,19 @@ import { ResumeWordRace } from "../src/application/usecases/ResumeWordRace.js";
 import { StopWordRace } from "../src/application/usecases/StopWordRace.js";
 import { SubmitSongPhrase } from "../src/application/usecases/SubmitSongPhrase.js";
 import { SubmitWord } from "../src/application/usecases/SubmitWord.js";
+import type { MatchRecord } from "../src/domain/model/MatchRecord.js";
+import type { MatchResultPublisher } from "../src/domain/ports/MatchResultPublisher.js";
+import { RedisMatchOutbox } from "../src/infrastructure/redis/RedisMatchOutbox.js";
 import { createStateStores, type StateStores } from "../src/infrastructure/redis/stateStores.js";
 import { WordRaceScheduler } from "../src/infrastructure/scheduling/WordRaceScheduler.js";
 import type { RoomDto } from "../src/infrastructure/serialization/roomDto.js";
 import type { WordRoundEndedPayload, WordRoundStartedPayload } from "../src/infrastructure/ws/events.js";
-import { registerSocketHandlers, type BattleServer, type SocketHandlersHandle } from "../src/infrastructure/ws/socketHandlers.js";
+import {
+  registerSocketHandlers,
+  type BattleServer,
+  type SocketDependencies,
+  type SocketHandlersHandle,
+} from "../src/infrastructure/ws/socketHandlers.js";
 import { createSocketWordRaceBroadcaster } from "../src/infrastructure/ws/wordRaceMessages.js";
 import { trustClaimedPlayerId } from "./support/auth.js";
 import { pickSong, readyUp } from "./support/ready.js";
@@ -80,8 +90,11 @@ const adapterKey = `test-${randomUUID().slice(0, 8)}`;
 const replicas: Replica[] = [];
 const clients: ClientSocket[] = [];
 const codes: string[] = [];
+/** Extra Redis connections opened by tests (outbox), closed in `after`. */
+const extraConnections: Redis[] = [];
+const outboxNamespace = `test-outbox-${randomUUID().slice(0, 8)}`;
 
-async function startReplica(name: string): Promise<Replica> {
+async function startReplica(name: string, extra: Partial<SocketDependencies> = {}): Promise<Replica> {
   const stores = createStateStores({ url: TEST_REDIS_URL!, ttlSeconds: 300, maxUpdateAttempts: 25, adapterKey });
   const { rooms, wordRaces: races } = stores;
   const http = createServer();
@@ -111,6 +124,7 @@ async function startReplica(name: string): Promise<Replica> {
     kickPlayer: new KickPlayer(rooms),
     reapRooms: new ReapRooms(rooms),
     disconnectGraceMs: 50,
+    ...extra,
     wordRace: {
       scheduler,
       submitWord: new SubmitWord(races),
@@ -165,6 +179,27 @@ async function battleOn(owner: Replica, seats: Array<[Replica, string, "dancer" 
   return { code: created.code, players };
 }
 
+/** The history of every replica of the test goes to this outbox in Redis, like production. */
+function recorder(publisher: MatchResultPublisher): RecordMatchResult {
+  const connection = new Redis(TEST_REDIS_URL!);
+  extraConnections.push(connection);
+  const outbox = new RedisMatchOutbox(connection, { deliveredRetentionSeconds: 300, namespace: outboxNamespace });
+  const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
+  return new RecordMatchResult(publisher, { outbox, redeliveryBaseMs: 0, logger: quiet });
+}
+
+/** users-service as each replica sees it: `hang` never answers (the replica dies mid-request). */
+function historyStore(hang: boolean): MatchResultPublisher & { calls: MatchRecord[] } {
+  const calls: MatchRecord[] = [];
+  return {
+    calls,
+    publish(match) {
+      calls.push(match);
+      return hang ? new Promise<void>(() => undefined) : Promise.resolve();
+    },
+  };
+}
+
 function endsOf(rec: Recorded, roundId: string): number {
   return rec.ended.filter((e) => e.roundId === roundId).length;
 }
@@ -208,6 +243,8 @@ describe("Two battle-service instances sharing one Redis", { skip: !TEST_REDIS_U
       await replica.io.close();
       await replica.stores.close();
     }
+    if (extraConnections.length > 0) await extraConnections[0].del(`{${outboxNamespace}}:pending`, `{${outboxNamespace}}:delivered`);
+    await Promise.allSettled(extraConnections.map((c) => c.quit()));
   });
 
   it("plays a whole battle with the players split between both instances", async () => {
@@ -352,6 +389,32 @@ describe("Two battle-service instances sharing one Redis", { skip: !TEST_REDIS_U
     await survivor.handlers.sweep();
     await waitUntil(() => guest.started.length >= 3 && endsOf(guest, guest.started[2].roundId) === 1, "every round ended", 6000);
     for (const round of guest.started) assert.equal(endsOf(guest, round.roundId), 1, `round ${round.roundNumber} ended once`);
+  });
+
+  it("DIS-1: a finished match whose finisher died before delivering it reaches the history through another replica, once", async () => {
+    const finisherStore = historyStore(true);
+    const survivorStore = historyStore(false);
+    const finisher = await startReplica("finisher", { recordMatchResult: recorder(finisherStore) });
+    const survivor = await startReplica("deliverer", { recordMatchResult: recorder(survivorStore) });
+    const { code, players } = await battleOn(finisher, [
+      [finisher, "o-host", "dancer"],
+      [finisher, "o-guest", "dancer"],
+      [survivor, "o-fan", "spectator"],
+    ]);
+    // A dancer leaves: two dancers are not enough, the battle finishes on the finisher...
+    await ok(players[1].socket, "room:leave", { roomCode: code, playerId: "o-guest" });
+    const battleId = (await survivor.stores.rooms.findByCode(code))!.battle!.id;
+    await waitUntil(() => finisherStore.calls.length === 1, "the finisher sending the match");
+    // ...which dies while users-service has not answered yet.
+    await kill(finisher);
+    // Other suites may share this Redis: their finished rooms are swept too, so count this battle only.
+    const deliveries = () => survivorStore.calls.filter((m) => m.id === battleId).length;
+    assert.equal(deliveries(), 0);
+
+    await survivor.handlers.sweep();
+    assert.equal(deliveries(), 1, "delivered by the survivor");
+    await survivor.handlers.sweep();
+    assert.equal(deliveries(), 1, "and only once");
   });
 
   it("lets instance 2 join a room that instance 1 created", async () => {

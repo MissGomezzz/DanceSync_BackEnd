@@ -64,7 +64,8 @@ export interface SocketDependencies {
   finishBattleAtDeadline: FinishBattleAtDeadline;
   /**
    * Stores every finished battle in the match history (HU 21), in the
-   * background. Optional so harnesses that do not exercise it can omit it.
+   * background, through a durable outbox the sweep drains (DIS-1). Optional so
+   * harnesses that do not exercise it can omit it.
    */
   recordMatchResult?: RecordMatchResult;
   /** Lists rooms and deletes empty ones for the abandoned-room sweep. */
@@ -418,6 +419,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     const now = Date.now();
     const seen = new Set<string>();
     for (const room of await deps.reapRooms.list()) {
+      // DIS-1: a finisher that died before enqueuing its result leaves it to this sweep.
+      if (room.status === "finished") await deps.recordMatchResult?.enqueueFinished(room);
       if (room.players.length === 0) {
         if (await deps.reapRooms.deleteIfEmpty(room.code)) {
           await announceLeave(room.code, { room: null, battleFinished: false, discardedVoterIds: [] });
@@ -447,6 +450,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     }
     // Forget seats that no longer exist.
     for (const key of unboundSince.keys()) if (!seen.has(key)) unboundSince.delete(key);
+    // DIS-1: every replica delivers the results still pending, whoever finished the battle.
+    await deps.recordMatchResult?.drain();
   }
 
   /** Joining as someone else or somewhere else first releases the seat bound so far. */

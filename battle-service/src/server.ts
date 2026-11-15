@@ -126,7 +126,10 @@ const socketHandlers = registerSocketHandlers(io, {
   kickPlayer: new KickPlayer(rooms),
   finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
   // Finished battles go to users-service (PUT /api/matches/{battleId}), retried with backoff.
-  recordMatchResult: new RecordMatchResult(new HttpMatchResultPublisher(env.usersServiceUrl)),
+  // DIS-1: through a durable outbox that every replica's sweep drains, so no result is lost.
+  recordMatchResult: new RecordMatchResult(new HttpMatchResultPublisher(env.usersServiceUrl), {
+    outbox: stateStores.matchOutbox,
+  }),
   reapRooms: new ReapRooms(rooms),
   disconnectGraceMs: env.disconnectGraceMs,
   pagehideGraceMs: env.pagehideGraceMs,
