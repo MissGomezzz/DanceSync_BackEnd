@@ -4,6 +4,7 @@ import type { Room } from "../../domain/model/Room.js";
 import type { MatchOutbox, PendingMatch } from "../../domain/ports/MatchOutbox.js";
 import { MatchPublishError, type MatchResultPublisher } from "../../domain/ports/MatchResultPublisher.js";
 import { MatchRecordService } from "../../domain/services/MatchRecordService.js";
+import { noopLogger, type LogFields, type Logger } from "../ports/Logger.js";
 
 export interface RecordMatchResultOptions {
   /** Total immediate tries by the finishing replica, the first included. Default 3. */
@@ -12,7 +13,7 @@ export interface RecordMatchResultOptions {
   baseDelayMs?: number;
   /** Injectable for tests. */
   sleep?: (ms: number) => Promise<void>;
-  /** `warn` (a match kept for redelivery) falls back to `error` when absent. */
+  /** `warn` (a match kept for redelivery) falls back to `error` when absent. Default: discards. */
   logger?: MatchLogger;
   /**
    * Durable outbox (DIS-1). With it, a match is stored before it is sent and
@@ -33,7 +34,7 @@ export interface RecordMatchResultOptions {
   drainBatch?: number;
 }
 
-export type MatchLogger = Pick<Console, "info" | "error"> & Partial<Pick<Console, "warn">>;
+export type MatchLogger = Pick<Logger, "info" | "error"> & Partial<Pick<Logger, "warn">>;
 
 export interface DrainResult {
   delivered: number;
@@ -72,8 +73,12 @@ export class RecordMatchResult {
     this.attempts = Math.max(1, options.attempts ?? 3);
     this.baseDelayMs = options.baseDelayMs ?? 500;
     this.sleep = options.sleep ?? ((ms) => delay(ms).then(() => undefined));
-    const logger = options.logger ?? console;
-    this.logger = { info: logger.info, error: logger.error, warn: logger.warn ?? logger.error };
+    const logger = options.logger ?? noopLogger;
+    this.logger = {
+      info: logger.info.bind(logger),
+      error: logger.error.bind(logger),
+      warn: (logger.warn ?? logger.error).bind(logger),
+    };
     this.outbox = options.outbox;
     this.clock = options.clock ?? (() => new Date());
     this.redeliveryBaseMs = options.redeliveryBaseMs ?? 5_000;
@@ -94,7 +99,7 @@ export class RecordMatchResult {
     for (let attempt = 1; attempt <= this.attempts; attempt++) {
       try {
         await this.publisher.publish(match);
-        this.logger.info(`Match ${match.id} of room ${match.roomCode} stored in the match history`);
+        this.logger.info(fieldsOf(match), "Match stored in the match history");
         await this.ack(match.id);
         return true;
       } catch (error) {
@@ -104,9 +109,9 @@ export class RecordMatchResult {
       }
     }
     if (durable) {
-      this.logger.warn(`Match ${match.id} of room ${match.roomCode} not stored yet; kept in the outbox for redelivery`, lastError);
+      this.logger.warn({ ...fieldsOf(match), err: lastError }, "Match not stored yet; kept in the outbox for redelivery");
     } else {
-      this.logger.error(`Match ${match.id} of room ${match.roomCode} could not be stored in the match history`, lastError);
+      this.logger.error({ ...fieldsOf(match), err: lastError }, "Match could not be stored in the match history");
     }
     return false;
   }
@@ -122,10 +127,10 @@ export class RecordMatchResult {
     if (!match) return false;
     try {
       const added = await this.outbox.enqueue(match, this.clock());
-      if (added) this.logger.warn(`Match ${match.id} of room ${match.roomCode} was missing from the outbox; enqueued by the sweep`);
+      if (added) this.logger.warn(fieldsOf(match), "Match was missing from the outbox; enqueued by the sweep");
       return added;
     } catch (error) {
-      this.logger.error(`Could not put match ${match.id} in the outbox`, error);
+      this.logger.error({ ...fieldsOf(match), err: error }, "Could not put the match in the outbox");
       return false;
     }
   }
@@ -142,14 +147,14 @@ export class RecordMatchResult {
     try {
       due = await this.outbox.listPending(this.clock(), this.drainBatch);
     } catch (error) {
-      this.logger.error("Could not read the match outbox", error);
+      this.logger.error({ err: error }, "Could not read the match outbox");
       return result;
     }
     for (const pending of due) {
       try {
         await this.publisher.publish(pending.match);
         await this.outbox.ack(pending.match.id);
-        this.logger.info(`Match ${pending.match.id} of room ${pending.match.roomCode} delivered from the outbox`);
+        this.logger.info({ ...fieldsOf(pending.match), attempts: pending.attempts + 1 }, "Match delivered from the outbox");
         result.delivered += 1;
       } catch (error) {
         result.failed += 1;
@@ -159,6 +164,17 @@ export class RecordMatchResult {
     return result;
   }
 
+  /** Matches still waiting in the outbox (OBS-1), or null without an outbox or when it cannot be read. */
+  async pendingCount(): Promise<number | null> {
+    if (!this.outbox?.count) return null;
+    try {
+      return await this.outbox.count();
+    } catch (error) {
+      this.logger.error({ err: error }, "Could not count the pending matches");
+      return null;
+    }
+  }
+
   private async reschedule(pending: PendingMatch, error: unknown): Promise<void> {
     const attempts = pending.attempts + 1;
     const permanent = error instanceof MatchPublishError && !error.retryable;
@@ -166,12 +182,12 @@ export class RecordMatchResult {
       ? this.redeliveryMaxMs
       : Math.min(this.redeliveryMaxMs, this.redeliveryBaseMs * 2 ** (attempts - 1));
     const log = permanent ? this.logger.error : this.logger.warn;
-    log.call(this.logger, `Match ${pending.match.id} delivery ${attempts} from the outbox failed; next try in ${waitMs} ms`, error);
+    log({ ...fieldsOf(pending.match), attempts, nextTryInMs: waitMs, err: error }, "Match delivery from the outbox failed");
     try {
       await this.outbox!.retryLater({ ...pending, attempts, nextAttemptAt: new Date(this.clock().getTime() + waitMs) });
     } catch (storeError) {
       // It stays due: the next drain tries it again.
-      this.logger.error(`Could not reschedule match ${pending.match.id} in the outbox`, storeError);
+      this.logger.error({ ...fieldsOf(pending.match), err: storeError }, "Could not reschedule the match in the outbox");
     }
   }
 
@@ -182,7 +198,7 @@ export class RecordMatchResult {
       await this.outbox.enqueue(match, notBefore);
       return true;
     } catch (error) {
-      this.logger.error(`Could not put match ${match.id} in the outbox`, error);
+      this.logger.error({ ...fieldsOf(match), err: error }, "Could not put the match in the outbox");
       return false;
     }
   }
@@ -193,7 +209,12 @@ export class RecordMatchResult {
       await this.outbox.ack(matchId);
     } catch (error) {
       // Delivered, but still pending: a later drain sends it again, which the upsert absorbs.
-      this.logger.error(`Could not remove match ${matchId} from the outbox`, error);
+      this.logger.error({ battleId: matchId, err: error }, "Could not remove the match from the outbox");
     }
   }
+}
+
+/** What every match log line carries: the battle, its room and its correlation id (OBS-1). */
+function fieldsOf(match: MatchRecord): LogFields {
+  return { battleId: match.id, roomId: match.roomCode, ...(match.correlationId ? { correlationId: match.correlationId } : {}) };
 }

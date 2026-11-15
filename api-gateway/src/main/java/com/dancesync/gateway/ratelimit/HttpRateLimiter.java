@@ -1,5 +1,7 @@
 package com.dancesync.gateway.ratelimit;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -52,14 +54,24 @@ public class HttpRateLimiter {
     private static final long LOG_INTERVAL_MS = 1000;
     private static final int MAX_TRACKED_SOURCES = 10_000;
 
+    /** OBS-1: gateway_rate_limited_total{policy}, every refused request (the audit line is sampled). */
+    static final String LIMITED_METRIC = "gateway.rate.limited";
+
     private final RateLimitProperties properties;
     private final TokenBucketStore store;
+    private final Map<String, Counter> limited = new ConcurrentHashMap<>();
     /** "policy ip" -> {last line written at, refusals since}: at most one audit line per second and source. */
     private final Map<String, long[]> logged = new ConcurrentHashMap<>();
 
-    public HttpRateLimiter(RateLimitProperties properties, TokenBucketStore store) {
+    public HttpRateLimiter(RateLimitProperties properties, TokenBucketStore store, MeterRegistry meterRegistry) {
         this.properties = properties;
         this.store = store;
+        for (String policy : new String[] {ROOM_CREATE, GUEST_TOKEN, SOCKET_HANDSHAKE, SOCKET_POLLING, OTHER}) {
+            limited.put(policy, Counter.builder(LIMITED_METRIC)
+                    .description("Requests refused with 429 by the gateway's rate limit (SEG-3)")
+                    .tag("policy", policy)
+                    .register(meterRegistry));
+        }
     }
 
     /** Has the shape of {@code WebFilter#filter}, so the security chain can take it as {@code rateLimiter::filter}. */
@@ -106,6 +118,7 @@ public class HttpRateLimiter {
     private Mono<Void> refuse(ServerWebExchange exchange, String policy, String ip, long waitMs) {
         ServerHttpRequest request = exchange.getRequest();
         String correlationId = request.getHeaders().getFirst(CORRELATION_HEADER);
+        limited.get(policy).increment();
         logRefusal(policy, ip, correlationId, request);
 
         ServerHttpResponse response = exchange.getResponse();

@@ -19,6 +19,7 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -75,6 +76,16 @@ class MatchControllerTest {
                 .andExpect(jsonPath("$.participants[2].role").value("spectator"))
                 .andExpect(jsonPath("$.participants[2].rank").value(nullValue()))
                 .andExpect(jsonPath("$.participants[2].leftEarly").value(true));
+    }
+
+    @Test
+    void putEchoesTheCorrelationIdOfBattleService() throws Exception {
+        mockMvc.perform(put("/api/matches/{id}", UUID.randomUUID())
+                        .header("X-Correlation-Id", "battle-trace-1")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_BODY))
+                .andExpect(status().isOk())
+                .andExpect(header().string("X-Correlation-Id", "battle-trace-1"));
     }
 
     @Test

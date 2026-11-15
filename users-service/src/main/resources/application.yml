@@ -18,11 +18,31 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: false
 
+# OBS-1: one JSON object per line (Elastic Common Schema): @timestamp, log.level,
+# service.name, message, plus the MDC (correlationId) and the key-value pairs of each line.
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        name: users-service
+
 management:
+  # OBS-1: actuator on its own port, scraped by Prometheus inside the network and never
+  # routed by the gateway. The API port keeps only GET /actuator/health (ApiPortHealthController).
+  server:
+    port: ${MANAGEMENT_PORT:9081}
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       show-details: when_authorized
+  metrics:
+    tags:
+      service: users-service
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true

@@ -26,7 +26,7 @@ const ROOMS_TARGET_PCT = 95;
 
 function loadReports() {
   return readdirSync(reportsDir)
-    .filter((file) => file.endsWith(".json"))
+    .filter((file) => file.endsWith(".json") && (file.startsWith("failover-") || file.startsWith("before-fix-")))
     .sort()
     .map((file) => {
       const report = JSON.parse(readFileSync(join(reportsDir, file), "utf8"));

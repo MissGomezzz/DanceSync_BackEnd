@@ -28,6 +28,8 @@ return 1`;
 export interface RedisRoomRepositoryOptions {
   ttlSeconds: number;
   maxAttempts: number;
+  /** Told about every lost race (OBS-1, dancesync_room_conflicts_total). */
+  onConflict?: (result: "retry" | "failure") => void;
 }
 
 /** Thrown when an update lost the race against other writers more times than allowed. */
@@ -106,9 +108,11 @@ export class RedisRoomRepository implements RoomRepository {
 
       // Someone else wrote first: decide again on the new state.
       this.stats.conflictRetries += 1;
+      this.options.onConflict?.("retry");
       await sleep(Math.random() * Math.min(40, 2 ** attempt));
     }
     this.stats.conflictFailures += 1;
+    this.options.onConflict?.("failure");
     throw new RoomUpdateConflictError(code, this.options.maxAttempts);
   }
 }

@@ -10,12 +10,16 @@ export interface ChooseSongInput {
   roomCode: string;
   playerId: string;
   songId: string;
+  /** Correlation id of the request, kept in the battle this choice may start (OBS-1). */
+  correlationId?: string;
 }
 
 export interface AutoPickSongInput {
   roomCode: string;
   /** The challenge whose chooser let the deadline pass. */
   challengeId: string;
+  /** Correlation id kept in the battle this pick may start (OBS-1). */
+  correlationId?: string;
 }
 
 export interface AutoPickSongOutput extends ChooseSongOutput {
@@ -53,7 +57,7 @@ export class ChooseSong {
       // `mutate` can run again after a version conflict: start from a clean flag.
       battleStarted = false;
       const chosen = SongSelectionService.choose(current, input.playerId, input.songId);
-      const result = this.startIfPossible(chosen, now);
+      const result = this.startIfPossible(chosen, now, input.correlationId);
       battleStarted = result.battleStarted;
       return result.room;
     });
@@ -75,7 +79,7 @@ export class ChooseSong {
       const chosen = SongSelectionService.autoPick(current, input.challengeId, now, this.random);
       if (!chosen) return current;
       picked = true;
-      const result = this.startIfPossible(chosen, now);
+      const result = this.startIfPossible(chosen, now, input.correlationId);
       battleStarted = result.battleStarted;
       return result.room;
     });
@@ -83,10 +87,11 @@ export class ChooseSong {
   }
 
   /** The chosen song starts the battle in the same stored change, unless the room is not startable yet. */
-  private startIfPossible(chosen: Room, now: Date): { room: Room; battleStarted: boolean } {
+  private startIfPossible(chosen: Room, now: Date, correlationId?: string): { room: Room; battleStarted: boolean } {
     if (chosen.songSelection === null) return { room: chosen, battleStarted: false };
     try {
-      return { room: RoomService.startBattle(chosen, undefined, { ...this.timing, now }), battleStarted: true };
+      const options = { ...this.timing, now, ...(correlationId ? { correlationId } : {}) };
+      return { room: RoomService.startBattle(chosen, undefined, options), battleStarted: true };
     } catch (error) {
       if (error instanceof DomainError) return { room: chosen, battleStarted: false };
       throw error;

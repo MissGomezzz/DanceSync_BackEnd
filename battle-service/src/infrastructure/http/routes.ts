@@ -1,11 +1,14 @@
 import express, { Router, type NextFunction, type Request, type Response } from "express";
 import { AuthError } from "../../application/auth/AuthIdentity.js";
+import type { Logger } from "../../application/ports/Logger.js";
+import { noopMetrics, type Metrics } from "../../application/ports/Metrics.js";
 import type { CreateRoom } from "../../application/usecases/CreateRoom.js";
 import type { IssueGuestToken } from "../../application/usecases/IssueGuestToken.js";
 import { DomainError, type DomainErrorCode } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
 import type { RoomRepository } from "../../domain/ports/RoomRepository.js";
 import { requireRoomCode } from "../../domain/services/RoomService.js";
+import { rootLogger } from "../logging/logger.js";
 import { toRoomDto } from "../serialization/roomDto.js";
 import { createHttpAuth, identityOf, type HttpAuth, type HttpAuthDependencies } from "./httpAuth.js";
 
@@ -32,6 +35,10 @@ export interface HttpDependencies {
   readiness?: () => Promise<void>;
   /** Longest wait for `readiness` before answering 503; below the probe's own timeout. Default 800 ms. */
   readinessTimeoutMs?: number;
+  /** Structured logs (OBS-1). Default: the process logger. */
+  logger?: Logger;
+  /** Guest sessions (OBS-1). Default: none. */
+  metrics?: Metrics;
 }
 
 const DEFAULT_READINESS_TIMEOUT_MS = 800;
@@ -74,6 +81,7 @@ const STATUS_BY_CODE: Record<DomainErrorCode, number> = {
 export function buildRouter(deps: HttpDependencies): Router {
   const router = Router();
   const auth = createHttpAuth(deps.auth);
+  const logger = deps.logger ?? rootLogger;
   router.use(auth.correlation);
 
   // Liveness: the process answers HTTP. Cheap on purpose, so a slow dependency
@@ -90,7 +98,10 @@ export function buildRouter(deps: HttpDependencies): Router {
       await withTimeout(deps.readiness?.() ?? Promise.resolve(), deps.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS);
       res.json({ status: "UP", service: "battle-service", checks: { stateStore: "UP" } });
     } catch (error) {
-      console.warn(`Readiness check failed: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn(
+        { correlationId: res.locals.correlationId, reason: error instanceof Error ? error.message : String(error) },
+        "Readiness check failed",
+      );
       res.status(503).json({ status: "DOWN", service: "battle-service", checks: { stateStore: "DOWN" } });
     }
   });
@@ -124,6 +135,8 @@ export function buildRouter(deps: HttpDependencies): Router {
       }
       const { displayName } = (req.body ?? {}) as { displayName: string };
       const guest = await deps.issueGuestToken.execute({ roomCode: req.params.code, displayName });
+      // OBS-1: a guest token is how a guest session starts.
+      (deps.metrics ?? noopMetrics).sessionStarted("guest");
       res.status(201).json({ ...guest, expiresAt: guest.expiresAt.toISOString() });
     } catch (error) {
       next(error);
@@ -224,7 +237,22 @@ function readLeaveRequest(body: unknown): { token: string | undefined; reason: L
   return { token: token || undefined, reason };
 }
 
-export function errorHandler(error: unknown, _req: Request, res: Response, _next: NextFunction): void {
+/** The last error handler: domain errors to their status, anything unexpected to a logged (and counted) 500. */
+export function createErrorHandler(logger: Logger = rootLogger, metrics: Metrics = noopMetrics) {
+  return (error: unknown, req: Request, res: Response, next: NextFunction): void =>
+    handleError(error, req, res, next, logger, metrics);
+}
+
+export const errorHandler = createErrorHandler();
+
+function handleError(
+  error: unknown,
+  req: Request,
+  res: Response,
+  _next: NextFunction,
+  logger: Logger,
+  metrics: Metrics,
+): void {
   if (error instanceof DomainError) {
     res.status(STATUS_BY_CODE[error.code] ?? 400).json({ error: error.message, code: error.code });
     return;
@@ -237,7 +265,11 @@ export function errorHandler(error: unknown, _req: Request, res: Response, _next
     res.status(clientStatus).json({ error: isParseError ? "Malformed JSON body" : "Invalid request" });
     return;
   }
-  console.error("Unhandled error", error);
+  metrics.error("http");
+  logger.error(
+    { correlationId: res.locals.correlationId, method: req.method, path: req.path, err: error },
+    "Unhandled error",
+  );
   res.status(500).json({ error: "Internal server error" });
 }
 

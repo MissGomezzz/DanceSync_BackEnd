@@ -1,5 +1,6 @@
 import type { MatchRecord } from "../../domain/model/MatchRecord.js";
 import { MatchPublishError, type MatchResultPublisher } from "../../domain/ports/MatchResultPublisher.js";
+import { correlationIdFrom } from "../auth/authAudit.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -7,6 +8,10 @@ const DEFAULT_TIMEOUT_MS = 5_000;
  * Stores matches in users-service with `PUT /api/matches/{battleId}`, an
  * idempotent upsert, so a retried request never creates a second match. This
  * call goes service to service; the gateway does not expose the PUT.
+ *
+ * OBS-1: the battle's correlation id travels as X-Correlation-Id (a new one
+ * only when the battle has none), so users-service logs the stored match with
+ * the same id as the gateway and battle-service.
  */
 export class HttpMatchResultPublisher implements MatchResultPublisher {
   private readonly baseUrl: string;
@@ -21,13 +26,18 @@ export class HttpMatchResultPublisher implements MatchResultPublisher {
 
   async publish(match: MatchRecord): Promise<void> {
     const url = `${this.baseUrl}/api/matches/${encodeURIComponent(match.id)}`;
+    const { correlationId, ...document } = match;
     let response: Response;
     try {
       response = await this.fetchImpl(url, {
         method: "PUT",
-        headers: { "content-type": "application/json", accept: "application/json" },
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          "x-correlation-id": correlationIdFrom(correlationId),
+        },
         // Dates serialize as ISO-8601 instants.
-        body: JSON.stringify(match),
+        body: JSON.stringify(document),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
     } catch (error) {

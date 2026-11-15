@@ -1,3 +1,4 @@
+import { RecordingLogger } from "./support/logs.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer, type Server as HttpServer } from "node:http";
@@ -47,6 +48,8 @@ class AbuseServer {
   private http!: HttpServer;
   private readonly clients: ClientSocket[] = [];
 
+  readonly logger = new RecordingLogger();
+
   async start(blocks: BlockList, config: Partial<AbuseConfig> = {}): Promise<this> {
     this.http = createServer();
     this.io = new Server(this.http, { path: "/socket.io" });
@@ -57,7 +60,7 @@ class AbuseServer {
       socket.data.correlationId = `corr-${playerId}`;
       next();
     });
-    attachAbuseProtection(this.io, { config: { ...CONFIG, ...config }, blocks, audit: this.audit });
+    attachAbuseProtection(this.io, { config: { ...CONFIG, ...config }, blocks, audit: this.audit, logger: this.logger });
     this.io.on("connection", (socket) => {
       socket.on("ping", (_p: unknown, ack?: (r: unknown) => void) => ack?.({ ok: true, data: null }));
     });
@@ -203,18 +206,15 @@ describe("Block expiry and block list failures (SEG-3)", () => {
         throw new Error("Redis is down");
       },
     };
-    const errors: unknown[] = [];
-    const original = console.error;
-    console.error = (...args: unknown[]) => void errors.push(args);
     const server = await new AbuseServer().start(broken);
     try {
       const socket = await server.connected("bot", "198.51.100.66");
       const { closed } = blockedAndClosed(socket);
       flood(socket, 200);
       await closed;
+      const errors = server.logger.lines.filter((line) => line.level === "error");
       assert.ok(errors.length >= 2, "both failures are logged");
     } finally {
-      console.error = original;
       await server.stop();
     }
   });

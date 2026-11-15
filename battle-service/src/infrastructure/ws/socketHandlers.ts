@@ -17,10 +17,14 @@ import type { GetActiveWordRound } from "../../application/usecases/GetActiveWor
 import type { AwardWordBonus } from "../../application/usecases/AwardWordBonus.js";
 import type { SubmitWord } from "../../application/usecases/SubmitWord.js";
 import { AuthError, mayActInRoom, type AuthIdentity } from "../../application/auth/AuthIdentity.js";
+import type { LogFields, Logger } from "../../application/ports/Logger.js";
+import { noopMetrics, type Metrics } from "../../application/ports/Metrics.js";
+import type { SessionTracker } from "../../application/ports/SessionTracker.js";
 import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
 import { RoomService } from "../../domain/services/RoomService.js";
 import { consoleAuthAudit, correlationIdFrom, type AuthAuditLog } from "../auth/authAudit.js";
+import { rootLogger } from "../logging/logger.js";
 import { RoomTimers } from "../scheduling/RoomTimers.js";
 import type { WordRaceScheduler } from "../scheduling/WordRaceScheduler.js";
 import { toRoomDto, toRoomDtoOrNull } from "../serialization/roomDto.js";
@@ -84,6 +88,12 @@ export interface SocketDependencies {
   reaping?: ReapingOptions;
   /** Mid-battle word race. Optional so harnesses that do not exercise it can omit it. */
   wordRace?: WordRaceSocketDependencies;
+  /** Structured logs (OBS-1). Default: the process logger. */
+  logger?: Logger;
+  /** Business and technical metrics (OBS-1). Default: none. */
+  metrics?: Metrics;
+  /** Tells which signed-in handshakes start a session (OBS-1). Absent: user sessions are not counted. */
+  sessions?: SessionTracker;
 }
 
 export interface WordRaceSocketDependencies {
@@ -143,12 +153,14 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    * never release a seat that a later reconnect renewed.
    */
   const audit = deps.authAudit ?? consoleAuthAudit;
+  const logger = deps.logger ?? rootLogger;
+  const metrics = deps.metrics ?? noopMetrics;
   // No connection is accepted without a valid token: this runs before "connection".
   io.use(deps.authenticateHandshake);
   const graceTimers = new Map<string, NodeJS.Timeout>();
   /** When each pending grace timer fires (epoch ms), so a later, longer grace never postpones it. */
   const graceDeadlines = new Map<string, number>();
-  const roomTimers = new RoomTimers();
+  const roomTimers = new RoomTimers(undefined, logger, metrics);
   /**
    * Version of the room state the timers were last armed from. Two handlers can
    * publish out of order (version N after N+1); an older state must not clear or
@@ -161,7 +173,10 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   const unboundSince = new Map<string, number>();
   const createdRoomGraceMs = deps.reaping?.createdRoomGraceMs ?? deps.disconnectGraceMs + CREATED_ROOM_MARGIN_MS;
   const sweepTimer = setInterval(() => {
-    sweep().catch((error: unknown) => console.error("Error sweeping abandoned rooms", error));
+    sweep().catch((error: unknown) => {
+      metrics.error("sweep");
+      logger.error({ err: error }, "Error sweeping abandoned rooms");
+    });
   }, deps.reaping?.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS);
   sweepTimer.unref();
 
@@ -220,7 +235,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   async function autoPickSong(roomCode: string, challengeId: string): Promise<void> {
     let result;
     try {
-      result = await deps.chooseSong.autoPick({ roomCode, challengeId });
+      // Timer-driven: no request carries a correlation id, so the battle it may start gets a new one.
+      result = await deps.chooseSong.autoPick({ roomCode, challengeId, correlationId: correlationIdFrom(undefined) });
     } catch (error) {
       if (error instanceof DomainError && error.code === "ROOM_NOT_FOUND") return;
       throw error;
@@ -241,12 +257,15 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
   /** Single exit for every path that starts a battle: the host's start or the chosen song. */
   function announceBattleStarted(room: Room): void {
+    const log = logger.child(battleFields(room));
+    metrics.battleStarted();
+    log.info({ dancers: room.battle?.dancerIds.length, spectators: room.battle?.audience.length }, "Battle started");
     io.to(room.code).emit(ServerEvents.BATTLE_STARTED, toRoomDto(room, new Date()));
     publishRoom(room);
     // The battle already started; a failure planning the word race must not undo it.
     deps.wordRace?.scheduler
       .start(room.code)
-      .catch((error: unknown) => console.error("Error starting the word race", error));
+      .catch((error: unknown) => log.error({ err: error }, "Error starting the word race"));
   }
 
   /**
@@ -258,11 +277,15 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    * unavailable users-service never delays the room.
    */
   async function announceBattleFinished(room: Room): Promise<void> {
+    const log = logger.child(battleFields(room));
+    const durationSeconds = battleDurationSeconds(room);
+    if (durationSeconds !== null) metrics.battleFinished(durationSeconds);
+    log.info({ endReason: room.battle?.endReason, durationSeconds, winnerId: room.battle?.result?.winnerId }, "Battle finished");
     publishRoom(room);
     io.to(room.code).emit(ServerEvents.BATTLE_FINISHED, toRoomDto(room, new Date()));
     deps.recordMatchResult
       ?.execute(room)
-      .catch((error: unknown) => console.error("Error recording the match result", error));
+      .catch((error: unknown) => log.error({ err: error }, "Error recording the match result"));
     await deps.wordRace?.scheduler.stop(room.code);
   }
 
@@ -283,11 +306,11 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       if (!race) return;
       const { room, paidRoundIds } = await wordRace.awardWordBonus.reconcile(race);
       if (room && paidRoundIds.length > 0) {
-        console.warn(`Word bonus of rounds ${paidRoundIds.join(", ")} in room ${room.code} paid on resume`);
+        logger.warn({ ...battleFields(room), roundIds: paidRoundIds }, "Word bonus paid on resume");
         publishRoom(room);
       }
     } catch (error) {
-      if (!(error instanceof DomainError)) console.error(`Error resuming the word race of room ${roomCode}`, error);
+      if (!(error instanceof DomainError)) logger.error({ roomId: roomCode, err: error }, "Error resuming the word race");
     }
   }
 
@@ -391,11 +414,11 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     try {
       if (await isBound(roomCode, playerId)) return; // Player is back.
       // Traceable (DIS-1): a seat released during a failover means a client did not get back in time.
-      console.info(`Seat of ${playerId} in room ${roomCode} released: ${why}`);
+      logger.info({ roomId: roomCode, playerId, why }, "Seat released");
       await leaveRoom(roomCode, playerId);
     } catch (error) {
       // The player may have left explicitly or the room may already be gone.
-      if (!(error instanceof DomainError)) console.error("Error releasing abandoned seat", error);
+      if (!(error instanceof DomainError)) logger.error({ roomId: roomCode, playerId, err: error }, "Error releasing abandoned seat");
     }
   }
 
@@ -431,7 +454,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       const room = await deps.reapRooms.find(roomCode);
       if (!room || room.status !== "waiting" || room.players.some((p) => p.id !== hostId)) return;
     } catch (error) {
-      console.error("Error reading a new room before reaping it", error);
+      logger.error({ roomId: roomCode, err: error }, "Error reading a new room before reaping it");
       return;
     }
     await releaseSeatIfAbandoned(roomCode, hostId, "the host never connected after creating the room");
@@ -455,13 +478,17 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     // the list were deleted elsewhere, and their timers can go.
     const armedBefore = [...armedVersions.keys()];
     const listed = new Set<string>();
-    for (const room of await deps.reapRooms.list()) {
+    const rooms = await deps.reapRooms.list();
+    // OBS-1: read from the shared store, so every replica reports the same value.
+    metrics.roomsActive(rooms.filter((room) => room.players.length > 0).length);
+    for (const room of rooms) {
       listed.add(room.code.toUpperCase());
       for (const player of room.players) seen.add(seatKey(room.code, player.id));
       try {
         await sweepRoom(room, now);
       } catch (error) {
-        console.error(`Error sweeping room ${room.code}`, error);
+        metrics.error("sweep");
+        logger.error({ roomId: room.code, err: error }, "Error sweeping room");
         // Its seats could not be observed: a gap in the observations must never
         // count as time without a socket (DIS-1, e.g. during a failover).
         for (const player of room.players) unboundSince.delete(seatKey(room.code, player.id));
@@ -472,6 +499,17 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     for (const key of unboundSince.keys()) if (!seen.has(key)) unboundSince.delete(key);
     // DIS-1: every replica delivers the results still pending, whoever finished the battle.
     await deps.recordMatchResult?.drain();
+    await reportPendingMatches();
+  }
+
+  /** OBS-1 gauge of the shared outbox; a metric must never break the sweep. */
+  async function reportPendingMatches(): Promise<void> {
+    try {
+      const pending = await deps.recordMatchResult?.pendingCount();
+      if (typeof pending === "number") metrics.matchOutboxPending(pending);
+    } catch (error) {
+      logger.warn({ err: error }, "Could not report the pending matches");
+    }
   }
 
   async function sweepRoom(room: Room, now: number): Promise<void> {
@@ -516,11 +554,34 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   }
 
   io.on("connection", (socket) => {
+    const log = logger.child({
+      correlationId: socket.data.correlationId,
+      socketId: socket.id,
+      userKind: socket.data.auth?.kind,
+    });
+    log.info({ playerId: socket.data.auth?.playerId }, "Socket connected");
+    const kind = socket.data.auth?.kind;
+    if (kind) metrics.socketConnected(kind);
+    // A guest session starts with its token (POST guest-token); a signed-in one at
+    // a handshake after 30 min without any, counted once across replicas.
+    const identity = socket.data.auth;
+    if (identity?.kind === "user" && deps.sessions) {
+      deps.sessions.touch(identity.playerId).then(
+        (started) => {
+          if (started) metrics.sessionStarted("user");
+        },
+        (error: unknown) => log.warn({ err: error }, "Could not record the session"),
+      );
+    }
+    /** Runs a client event through guard, logging and measuring it with this connection's correlation id. */
+    const handle = <T>(event: string, ack: Ack<T> | undefined, handler: () => Promise<T>): Promise<void> =>
+      guard(socket, ack, handler, { event, log, metrics });
+
     // room:join binds the socket to a seat: every other event must act in the room
     // recorded here, see requireOwnSeat. The player is the one identified by the
     // token validated in the handshake, never an id sent by the client.
     socket.on(ClientEvents.ROOM_JOIN, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.ROOM_JOIN, ack, async () => {
         const identity = requireIdentity(socket);
         const playerId = identity.playerId;
         requireRoomScope(socket, identity, payload?.roomCode, ClientEvents.ROOM_JOIN, audit);
@@ -566,7 +627,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.ROLE_SELECT, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.ROLE_SELECT, ack, async () => {
         const { roomCode, playerId } = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const room = await deps.selectRole.execute({ ...payload, roomCode, playerId });
         publishRoom(room);
@@ -575,7 +636,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.PLAYER_READY, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.PLAYER_READY, ack, async () => {
         const { roomCode, playerId } = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const room = await deps.setReady.execute({ ...payload, roomCode, playerId });
         publishRoom(room);
@@ -584,7 +645,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.ROOM_LEAVE, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.ROOM_LEAVE, ack, async () => {
         const { roomCode, playerId } = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const left = await leaveRoom(roomCode, playerId);
         return toRoomDtoOrNull(left.room, new Date());
@@ -592,7 +653,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.PLAYER_KICK, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.PLAYER_KICK, ack, async () => {
         const { roomCode, playerId: requesterId } = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
         const room = await deps.kickPlayer.execute({ ...payload, roomCode, requesterId });
         const kickedId = payload.playerId;
@@ -608,23 +669,34 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.BATTLE_START, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.BATTLE_START, ack, async () => {
         const { roomCode, playerId: requesterId } = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
-        const room = await deps.startBattle.execute({ ...payload, roomCode, requesterId });
+        const room = await deps.startBattle.execute({
+          ...payload,
+          roomCode,
+          requesterId,
+          correlationId: socket.data.correlationId,
+        });
         announceBattleStarted(room);
         return toRoomDto(room, new Date());
       }),
     );
 
     socket.on(ClientEvents.WORD_SUBMIT, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.WORD_SUBMIT, ack, async () => {
         const { roomCode, playerId } = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         if (!deps.wordRace) throw new DomainError("WORD_RACE_NOT_ACTIVE", "The word race is not enabled");
         const result = await deps.wordRace.submitWord.execute({ ...payload, roomCode, playerId });
         // Only the submission whose atomic claim succeeded announces the winner, so
         // the room receives exactly one word:round-ended per round.
         if (result.outcome === "won") {
-          const bonus = await awardWordBonus(deps.wordRace, roomCode, playerId, result.round.id);
+          // Only the submission whose atomic claim applied gets here: each round is counted once.
+          metrics.wordRoundEnded("won");
+          logger.info(
+            { ...raceFields(result.race), roundId: result.round.id, outcome: "won", winnerId: playerId },
+            "Word round ended",
+          );
+          const bonus = await awardWordBonus(deps.wordRace, roomCode, playerId, result.round.id, logger);
           io.to(roomCode).emit(
             ServerEvents.WORD_ROUND_ENDED,
             roundEndedPayload(result.race, result.round, bonus?.battle?.scoring.wordBonusPoints ?? 0),
@@ -636,7 +708,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.SONG_CHALLENGE_START, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.SONG_CHALLENGE_START, ack, async () => {
         const { roomCode, playerId: requesterId } = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
         const room = await deps.startSongChallenge.execute({ ...payload, roomCode, requesterId });
         publishRoom(room);
@@ -645,7 +717,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.SONG_CHALLENGE_SUBMIT, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.SONG_CHALLENGE_SUBMIT, ack, async () => {
         const { roomCode, playerId } = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const result = await deps.submitSongPhrase.execute({ ...payload, roomCode, playerId });
         publishRoom(result.room);
@@ -654,9 +726,14 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.SONG_CHOOSE, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.SONG_CHOOSE, ack, async () => {
         const { roomCode, playerId } = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
-        const { room, battleStarted } = await deps.chooseSong.execute({ ...payload, roomCode, playerId });
+        const { room, battleStarted } = await deps.chooseSong.execute({
+          ...payload,
+          roomCode,
+          playerId,
+          correlationId: socket.data.correlationId,
+        });
         if (battleStarted) announceBattleStarted(room);
         else publishRoom(room);
         return toRoomDto(room, new Date());
@@ -664,7 +741,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.CHAT_MESSAGE, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.CHAT_MESSAGE, ack, async () => {
         const { roomCode, playerId: senderId } = requireOwnSeat(socket, payload?.roomCode, payload?.senderId);
         const message = await deps.sendChatMessage.execute({ ...payload, roomCode, senderId });
         io.to(message.roomCode).emit(ServerEvents.CHAT_MESSAGE, message);
@@ -673,7 +750,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.VOTE_CAST, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.VOTE_CAST, ack, async () => {
         const { roomCode, playerId: voterId } = requireOwnSeat(socket, payload?.roomCode, payload?.voterId);
         const { room, dancerId, changed } = await deps.castVote.execute({
           roomCode,
@@ -682,13 +759,15 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         });
         // Everyone gets the new totals; only the voter's own tabs learn the choice.
         if (changed) publishRoom(room);
+        // A new or switched vote; a repeated one or a withdrawal is not a vote.
+        if (changed && dancerId !== null) metrics.voteCast();
         emitVoteMine(room.code, voterId, dancerId);
         return { dancerId };
       }),
     );
 
     socket.on(ClientEvents.ROOM_REMATCH, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.ROOM_REMATCH, ack, async () => {
         const { roomCode, playerId: requesterId } = requireOwnSeat(socket, payload?.roomCode, payload?.requesterId);
         const { room, clearedVoterIds } = await deps.startRematch.execute({ roomCode, requesterId });
         // Back in the lobby: no word race, and publishRoom clears every battle deadline.
@@ -702,7 +781,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     // WebRTC signaling is a thin relay: it checks room membership and forwards
     // opaque payloads. Media flows peer to peer and never reaches the server.
     socket.on(ClientEvents.WEBRTC_READY, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.WEBRTC_READY, ack, async () => {
         const { roomCode, playerId } = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         socket.to(roomCode).emit(ServerEvents.WEBRTC_PEER_READY, { playerId });
         return null;
@@ -710,7 +789,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     );
 
     socket.on(ClientEvents.WEBRTC_SIGNAL, (payload, ack) =>
-      guard(socket, ack, async () => {
+      handle(ClientEvents.WEBRTC_SIGNAL, ack, async () => {
         const { roomCode, playerId: from } = requireOwnSeat(socket, payload?.roomCode, payload?.from);
         const signal = requireValidSignal({ ...payload, from });
         const roomSockets = await io.in(roomCode).fetchSockets();
@@ -729,8 +808,10 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       if (roomCode && !socket.rooms.has(roomCode)) clearBinding(socket);
     });
 
-    socket.on("disconnect", () => {
+    socket.on("disconnect", (reason) => {
       const { playerId, roomCode } = socket.data;
+      log.info({ roomId: roomCode, reason }, "Socket disconnected");
+      if (kind) metrics.socketDisconnected(kind);
       if (!playerId || !roomCode) return;
       // A refresh or a transient network drop disconnects the socket too. Removing the
       // player immediately would delete a room whose only player is reloading the page,
@@ -781,6 +862,7 @@ async function awardWordBonus(
   roomCode: string,
   playerId: string,
   roundId: string,
+  logger: Logger,
 ): Promise<Room | null> {
   try {
     return await wordRace.awardWordBonus.execute({ roomCode, playerId, roundId });
@@ -788,9 +870,9 @@ async function awardWordBonus(
     // Expected when the battle finished or the winner left meanwhile; still logged,
     // so a bonus that was not paid can always be traced.
     if (error instanceof DomainError) {
-      console.warn(`Word bonus not awarded in room ${roomCode} to ${playerId}: ${error.code} ${error.message}`);
+      logger.warn({ roomId: roomCode, playerId, roundId, code: error.code, reason: error.message }, "Word bonus not awarded");
     } else {
-      console.error("Error awarding the word bonus", error);
+      logger.error({ roomId: roomCode, playerId, roundId, err: error }, "Error awarding the word bonus");
     }
     return null;
   }
@@ -905,6 +987,18 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+/** What guard needs to observe an event (OBS-1). */
+interface GuardContext {
+  /** The client event being handled; a bounded set of names. */
+  event: string;
+  /** The connection's logger (correlationId, socketId, userKind). */
+  log: Logger;
+  metrics: Metrics;
+}
+
+/** Events too chatty for the info level: WebRTC signaling relays every ICE candidate. */
+const DEBUG_EVENTS = new Set<string>([ClientEvents.WEBRTC_SIGNAL, ClientEvents.WEBRTC_READY]);
+
 /**
  * Runs a handler, replying through the ack callback when provided and emitting a
  * domain error event to the calling socket otherwise.
@@ -913,23 +1007,71 @@ function isNonEmptyString(value: unknown): value is string {
  * trailing argument was sent, so it is only called when it really is a function.
  * The returned promise never rejects, because an unhandled rejection would stop
  * the process and drop every room held in memory.
+ *
+ * OBS-1: every handled event is logged once, with the connection's correlation
+ * id, the event name, the room and how long it took (receive to reply). The
+ * payload is never logged.
  */
-async function guard<T>(socket: BattleSocket, ack: Ack<T> | undefined, handler: () => Promise<T>): Promise<void> {
+async function guard<T>(
+  socket: BattleSocket,
+  ack: Ack<T> | undefined,
+  handler: () => Promise<T>,
+  { event, log, metrics }: GuardContext,
+): Promise<void> {
   const reply: Ack<T> | undefined = typeof ack === "function" ? ack : undefined;
+  const startedAt = performance.now();
+  const roomBefore = socket.data.roomCode;
+  const done = (fields: LogFields): void => {
+    const durationMs = performance.now() - startedAt;
+    metrics.socketEventHandled(event, durationMs / 1000);
+    const line = {
+      event,
+      roomId: socket.data.roomCode ?? roomBefore,
+      durationMs: Math.round(durationMs * 100) / 100,
+      ...fields,
+    };
+    if (DEBUG_EVENTS.has(event) && fields.ok) log.debug(line, "Socket event handled");
+    else log.info(line, "Socket event handled");
+  };
   try {
     const data = await handler();
     reply?.({ ok: true, data });
+    done({ ok: true });
   } catch (error) {
     try {
       const expected = error instanceof DomainError || error instanceof AuthError;
       const payload = expected
         ? { code: error.code, message: error.message }
         : { code: "INTERNAL_ERROR", message: "Unexpected server error" };
-      if (!expected) console.error("Unhandled socket error", error);
+      if (!expected) {
+        metrics.error("socket");
+        log.error({ event, roomId: socket.data.roomCode ?? roomBefore, err: error }, "Unhandled socket error");
+      }
       if (reply) reply({ ok: false, error: payload });
       else socket.emit(ServerEvents.ERROR, payload);
+      done({ ok: false, code: payload.code });
     } catch (replyError) {
-      console.error("Error reporting a socket error", replyError);
+      log.error({ event, err: replyError }, "Error reporting a socket error");
     }
   }
+}
+
+/** The fields that tie a log line to a battle: room, battle and its correlation id (OBS-1). */
+function battleFields(room: Room): LogFields {
+  return {
+    roomId: room.code,
+    battleId: room.battle?.id,
+    ...(room.battle?.correlationId ? { correlationId: room.battle.correlationId } : {}),
+  };
+}
+
+function raceFields(race: { roomCode: string; battleId: string; correlationId?: string }): LogFields {
+  return { roomId: race.roomCode, battleId: race.battleId, ...(race.correlationId ? { correlationId: race.correlationId } : {}) };
+}
+
+/** From the moment dancing began to the finish; null while the battle runs. */
+function battleDurationSeconds(room: Room): number | null {
+  const battle = room.battle;
+  if (!battle?.finishedAt) return null;
+  return Math.max(0, (battle.finishedAt.getTime() - battle.startedAt.getTime()) / 1000);
 }

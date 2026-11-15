@@ -6,6 +6,16 @@ server:
 # The filter must NOT run on WebSocket upgrades: their response headers are
 # read-only once the handshake is committed and the upgrade would fail.
 
+# OBS-1: one JSON object per line (Elastic Common Schema), the same format as users-service.
+# The SEG-1/SEG-3 audit logger keeps its own format (see logback-spring.xml).
+logging:
+  structured:
+    format:
+      console: ecs
+    ecs:
+      service:
+        name: api-gateway
+
 spring:
   application:
     name: api-gateway
@@ -13,6 +23,9 @@ spring:
     gateway:
       server:
         webflux:
+          # OBS-1: spring_cloud_gateway_requests_seconds, per route and outcome.
+          metrics:
+            enabled: true
           globalcors:
             cors-configurations:
               '[/**]':
@@ -118,10 +131,24 @@ dancesync:
       burst: ${RATE_LIMIT_OTHER_BURST:40}
 
 management:
+  # OBS-1: actuator on its own port, scraped by Prometheus inside the network; it is not
+  # published and no route leads to it. Prometheus scrapes it without a token
+  # (ManagementSecurityConfig), so it exposes health and prometheus only. The API port keeps
+  # only GET /actuator/health (ApiPortHealthController); its security rules for /actuator/**
+  # are unchanged.
+  server:
+    port: ${MANAGEMENT_PORT:9082}
   endpoints:
     web:
       exposure:
-        include: health,info,gateway
+        include: health,prometheus
   endpoint:
     health:
       show-details: when_authorized
+  metrics:
+    tags:
+      service: api-gateway
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        spring.cloud.gateway.requests: true

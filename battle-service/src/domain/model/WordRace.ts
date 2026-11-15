@@ -43,6 +43,8 @@ export interface WordRace {
   rounds: WordRound[];
   /** Rounds won per participant. The count that scores is stored in Battle.wordsWon. */
   wins: Record<string, number>;
+  /** The battle's correlation id (OBS-1), for the logs of its timer-driven rounds. */
+  correlationId?: string;
 }
 
 /**

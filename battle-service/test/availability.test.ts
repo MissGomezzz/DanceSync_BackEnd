@@ -1,3 +1,4 @@
+import { RecordingLogger } from "./support/logs.js";
 import assert from "node:assert/strict";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -104,10 +105,8 @@ describe("Sweep resilience (DIS-1)", () => {
     const harness = new SocketHarness();
     const finished = RoomService.finishBattle(battleRoom(["a", "b"], []), "song-end");
     const failing = { enqueueFinished: async () => Promise.reject(new Error("store down")), drain: async () => ({ delivered: 0, failed: 0 }) };
-    await harness.start({ extend: () => ({ recordMatchResult: failing as unknown as RecordMatchResult }) });
-    const original = console.error;
-    const logged: unknown[] = [];
-    console.error = (...args: unknown[]) => logged.push(args);
+    const logger = new RecordingLogger();
+    await harness.start({ extend: () => ({ recordMatchResult: failing as unknown as RecordMatchResult, logger }) });
     try {
       await harness.rooms.insert(finished);
       // An empty room the sweep must delete, whatever happens to the finished one.
@@ -115,9 +114,8 @@ describe("Sweep resilience (DIS-1)", () => {
       await harness.rooms.insert(empty);
       await harness.handlers().sweep();
       assert.equal(await harness.rooms.findByCode("EMPTY1"), undefined, "the empty room was still reaped");
-      assert.ok(logged.some((entry) => String((entry as unknown[])[0]).includes(`Error sweeping room ${finished.code}`)));
+      assert.ok(logger.find("Error sweeping room").some((line) => line.fields.roomId === finished.code));
     } finally {
-      console.error = original;
       await harness.stop();
     }
   });

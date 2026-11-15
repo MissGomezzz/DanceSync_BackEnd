@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="252" viewBox="0 0 760 252" role="img" aria-labelledby="t d">
+  <title id="t">OBS-1 observability scorecard</title>
+  <desc id="d">Metrics delay: 5.0 s (Target &lt;= 15 s, met); Alert fired: 29.7 s (Target &lt; 60 s, met); Traced services: 3 of 3 (Target 3 of 3, met)</desc>
+  <style>
+    svg { --surface: #fcfcfb; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #6f6e69;
+          --grid: #e4e3df; --axis: #a9a8a2; --series-1: #2a78d6; --series-2: #eb6834;
+          --good: #006300; --good-fill: #e3f1e3; --bad: #b3261e; --bad-fill: #fbe9e7; --target: #0b0b0b; }
+    @media (prefers-color-scheme: dark) {
+      svg { --surface: #1a1a19; --text-1: #f0efec; --text-2: #c3c2b7; --text-3: #9d9c94;
+            --grid: #2e2e2c; --axis: #5c5b56; --series-1: #3987e5; --series-2: #d95926;
+            --good: #5fc85f; --good-fill: #1f2e1f; --bad: #f28b82; --bad-fill: #3a1f1d; --target: #f0efec; }
+    }
+    text { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; fill: var(--text-2); }
+    .title { font-size: 16px; font-weight: 600; fill: var(--text-1); }
+    .subtitle { font-size: 12px; fill: var(--text-2); }
+    .tick { font-size: 11px; fill: var(--text-3); }
+    .label { font-size: 12px; fill: var(--text-1); }
+    .detail { font-size: 11px; fill: var(--text-3); }
+    .value { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .target-label { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .note { font-size: 11px; fill: var(--text-3); }
+  </style>
+  <rect width="760" height="252" fill="var(--surface)"/>
+  <text class="title" x="24" y="30">OBS-1 observability: all three measures met</text>
+  <text class="subtitle" x="24" y="52">Prometheus scrape and rule evaluation every 5 s, Grafana refresh 5 s, alert rules with for: 15s.</text>
+  <g>
+    <rect x="24" y="76" width="229.33333333333334" height="132" rx="8" fill="none" stroke="var(--grid)" stroke-width="1"/>
+    <text class="subtitle" x="38" y="100">Metrics delay</text>
+    <text x="38" y="138" style="font-size: 30px; font-weight: 600; fill: var(--text-1)">5.0 s</text>
+    <text class="detail" x="38" y="156">worst of 20 samples</text>
+    <text class="label" x="38" y="188">Target &lt;= 15 s</text>
+    <rect x="177.33333333333334" y="174" width="64" height="20" rx="10" fill="var(--good-fill)"/>
+    <text x="209.33333333333334" y="188" text-anchor="middle" style="font-size: 11px; font-weight: 600; fill: var(--good)">&#10003; Met</text>
+  </g>
+  <g>
+    <rect x="265.33333333333337" y="76" width="229.33333333333334" height="132" rx="8" fill="none" stroke="var(--grid)" stroke-width="1"/>
+    <text class="subtitle" x="279.33333333333337" y="100">Alert fired</text>
+    <text x="279.33333333333337" y="138" style="font-size: 30px; font-weight: 600; fill: var(--text-1)">29.7 s</text>
+    <text class="detail" x="279.33333333333337" y="156">worst of 10 runs</text>
+    <text class="label" x="279.33333333333337" y="188">Target &lt; 60 s</text>
+    <rect x="418.66666666666674" y="174" width="64" height="20" rx="10" fill="var(--good-fill)"/>
+    <text x="450.66666666666674" y="188" text-anchor="middle" style="font-size: 11px; font-weight: 600; fill: var(--good)">&#10003; Met</text>
+  </g>
+  <g>
+    <rect x="506.6666666666667" y="76" width="229.33333333333334" height="132" rx="8" fill="none" stroke="var(--grid)" stroke-width="1"/>
+    <text class="subtitle" x="520.6666666666667" y="100">Traced services</text>
+    <text x="520.6666666666667" y="138" style="font-size: 30px; font-weight: 600; fill: var(--text-1)">3 of 3</text>
+    <text class="detail" x="520.6666666666667" y="156">one correlation id</text>
+    <text class="label" x="520.6666666666667" y="188">Target 3 of 3</text>
+    <rect x="660" y="174" width="64" height="20" rx="10" fill="var(--good-fill)"/>
+    <text x="692" y="188" text-anchor="middle" style="font-size: 11px; font-weight: 600; fill: var(--good)">&#10003; Met</text>
+  </g>
+  <text class="note" x="24" y="236">Local stack: docker-compose.observability.yml (gateway, nginx, 2 battle replicas, users-service, Redis, PostgreSQL). Source: load-tests/reports/obs-*.json</text>
+</svg>

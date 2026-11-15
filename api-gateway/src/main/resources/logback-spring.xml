@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+OBS-1: every log line is one JSON object (logging.structured.format.console, ECS), like
+Spring Boot does on its own, except the SEG-1/SEG-3 audit trail: its logger keeps the
+console format it always had, so its lines and their JSON payload stay exactly as before
+(audit belongs to its own scope).
+-->
+<configuration>
+	<include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+	<include resource="org/springframework/boot/logging/logback/structured-console-appender.xml"/>
+
+	<appender name="AUDIT" class="ch.qos.logback.core.ConsoleAppender">
+		<encoder>
+			<pattern>${CONSOLE_LOG_PATTERN}</pattern>
+			<charset>${CONSOLE_LOG_CHARSET}</charset>
+		</encoder>
+	</appender>
+
+	<logger name="dancesync.security.audit" additivity="false">
+		<appender-ref ref="AUDIT"/>
+	</logger>
+
+	<root level="INFO">
+		<appender-ref ref="CONSOLE"/>
+	</root>
+</configuration>

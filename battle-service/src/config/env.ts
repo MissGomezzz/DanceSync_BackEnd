@@ -86,6 +86,11 @@ export function loadEnv(source: Source = process.env) {
   const read = (name: string, fallback: number, rule: NumberRule) => readNumber(source, name, fallback, rule);
   return {
     port: read("PORT", 3000, "non-negative-integer"),
+    /**
+     * Port of the Prometheus /metrics endpoint (OBS-1): a separate server, never
+     * routed by the gateway or nginx; Prometheus scrapes each replica on it.
+     */
+    metricsPort: read("METRICS_PORT", 9464, "non-negative-integer"),
     corsOrigin: source.CORS_ORIGIN ?? "http://localhost:5173",
     usersServiceUrl: source.USERS_SERVICE_URL ?? "http://localhost:8081",
     /**

@@ -33,6 +33,8 @@ export interface StartBattleOptions {
   fallbackDurationMs?: number;
   /** Points per vote and per word won; snapshotted into the battle. */
   scoring?: ScoringPoints;
+  /** Correlation id of the start request, kept in the battle for tracing (OBS-1). */
+  correlationId?: string;
 }
 
 export const DEFAULT_SCORING: ScoringPoints = {
@@ -244,6 +246,7 @@ export const RoomService = {
       countdownMs = DEFAULT_START_COUNTDOWN_MS,
       fallbackDurationMs = DEFAULT_WORD_FALLBACK_DURATION_MS,
       scoring = DEFAULT_SCORING,
+      correlationId,
     } = options;
     for (const [name, value] of [
       ["start countdown", countdownMs],
@@ -311,6 +314,7 @@ export const RoomService = {
       finishedAt: null,
       endReason: null,
       result: null,
+      ...(correlationId ? { correlationId } : {}),
     };
     return {
       ...room,

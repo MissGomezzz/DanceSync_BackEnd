@@ -66,8 +66,8 @@ export function toRoomDto(room: Room, now: Date): RoomDto {
 }
 
 function toBattleDto(battle: Battle, running: boolean, at: number): BattleDto {
-  // wordRoundsAwarded is server bookkeeping (DIS-1), not something clients use.
-  const { votes: _private, wordRoundsAwarded: _bookkeeping, ...visible } = battle;
+  // wordRoundsAwarded (DIS-1) and correlationId (OBS-1) are server bookkeeping, not something clients use.
+  const { votes: _private, wordRoundsAwarded: _bookkeeping, correlationId: _trace, ...visible } = battle;
   // A finished battle shows its frozen result; a running one is scored live.
   const standings = battle.result ? battle.result.standings : ScoringService.standings(battle);
   return {

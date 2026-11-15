@@ -12,6 +12,7 @@ WORKDIR /app
 RUN useradd --system --create-home app
 COPY --from=build /app/target/*.jar app.jar
 USER app
-EXPOSE 8081
+# 8081: API. 9081: actuator health and Prometheus (MANAGEMENT_PORT), internal only.
+EXPOSE 8081 9081
 ENV JAVA_TOOL_OPTIONS="-XX:+UseSerialGC -XX:TieredStopAtLevel=1 -XX:MaxRAMPercentage=75"
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

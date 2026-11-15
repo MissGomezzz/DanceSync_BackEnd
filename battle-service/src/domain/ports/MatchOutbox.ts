@@ -34,4 +34,6 @@ export interface MatchOutbox {
   ack(matchId: string): Promise<void>;
   /** A delivery failed: the match stays for another try at nextAttemptAt. No-op if it was acked meanwhile. */
   retryLater(pending: PendingMatch): Promise<void>;
+  /** Matches still pending, due or not (OBS-1 gauge). Optional for older implementations. */
+  count?(): Promise<number>;
 }

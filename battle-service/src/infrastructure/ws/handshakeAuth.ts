@@ -1,6 +1,8 @@
 import type { Socket } from "socket.io";
 import { AuthError, type TokenVerifier } from "../../application/auth/AuthIdentity.js";
+import type { Logger } from "../../application/ports/Logger.js";
 import { CORRELATION_HEADER, correlationIdFrom, type AuthAuditLog } from "../auth/authAudit.js";
+import { rootLogger } from "../logging/logger.js";
 import type { SocketData } from "./events.js";
 
 /** Socket.IO middleware run once per connection, before the "connection" event. */
@@ -12,6 +14,8 @@ export type HandshakeAuthenticator = (
 export interface HandshakeAuthDependencies {
   verifier: TokenVerifier;
   audit: AuthAuditLog;
+  /** Default: the process logger. */
+  logger?: Logger;
 }
 
 /**
@@ -25,7 +29,7 @@ export interface HandshakeAuthDependencies {
  * It lives here and not in the api-gateway because the gateway only proxies the
  * connection: it cannot read the handshake payload.
  */
-export function createHandshakeAuth({ verifier, audit }: HandshakeAuthDependencies): HandshakeAuthenticator {
+export function createHandshakeAuth({ verifier, audit, logger = rootLogger }: HandshakeAuthDependencies): HandshakeAuthenticator {
   return (socket, next) => {
     const correlationId = correlationIdFrom(socket.handshake.headers[CORRELATION_HEADER]);
     socket.data.correlationId = correlationId;
@@ -36,7 +40,7 @@ export function createHandshakeAuth({ verifier, audit }: HandshakeAuthDependenci
       },
       (error: unknown) => {
         const failure = error instanceof AuthError ? error : new AuthError("UNAUTHORIZED", "verifier_unavailable");
-        if (!(error instanceof AuthError)) console.error("Error validating a handshake token", error);
+        if (!(error instanceof AuthError)) logger.error({ correlationId, err: error }, "Error validating a handshake token");
         audit.rejected({
           channel: "socket.io",
           code: failure.code,

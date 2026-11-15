@@ -129,8 +129,8 @@ export class SocketHarness {
   }
 
   /** A connected client; `token` travels in the handshake like the frontend sends it. */
-  async client(token?: string): Promise<ClientSocket> {
-    const socket = this.open(token === undefined ? undefined : { token });
+  async client(token?: string, extraHeaders?: Record<string, string>): Promise<ClientSocket> {
+    const socket = this.open(token === undefined ? undefined : { token }, extraHeaders);
     await new Promise<void>((resolve, reject) => {
       socket.on("connect", () => resolve());
       socket.on("connect_error", (error) => reject(new Error(`The handshake was refused: ${error.message}`)));
