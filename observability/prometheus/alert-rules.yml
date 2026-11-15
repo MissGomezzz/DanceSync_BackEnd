@@ -1,0 +1,75 @@
+# OBS-1 alert rules (PRD-OBS-1, "Alert rules"). Evaluated every 5 s; each rule has a `for:` so that one
+# bad scrape does not fire it. Thresholds follow REN-1 (p95 <= 300 ms). No notification channel: the
+# states are shown in Grafana (technical dashboard) and in Prometheus (/alerts, /api/v1/alerts).
+groups:
+  - name: dancesync-availability
+    rules:
+      - alert: BattleReplicaDown
+        expr: up{job="battle-service"} == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "battle-service replica {{ $labels.instance }} is down"
+          description: "Prometheus cannot scrape {{ $labels.instance }}:9464. nginx keeps sending traffic to the other replica."
+
+      - alert: ServiceDown
+        # The service itself (scrape fails) or the database behind an exporter that still answers.
+        expr: up{job=~"api-gateway|users-service|redis|postgres"} == 0 or redis_up == 0 or pg_up == 0
+        for: 15s
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} ({{ $labels.instance }}) is down"
+          description: "The target or the database behind its exporter does not answer."
+
+  - name: dancesync-latency
+    rules:
+      - alert: HighHttpLatency
+        # p95 per service over the last 30 s. Excluded: probes and actuator, and the gateway's Socket.IO
+        # routes (a proxied WebSocket or long-polling request lasts as long as the connection, not a reply).
+        # The gateway is measured per route (spring_cloud_gateway_requests_seconds): its
+        # http_server_requests tags every proxied request as uri="UNKNOWN", WebSockets included.
+        expr: |
+          histogram_quantile(0.95, sum by (service, le) (rate(spring_cloud_gateway_requests_seconds_bucket{routeId!~"battle-service-socket.*"}[30s]))) > 0.3
+          or
+          histogram_quantile(0.95, sum by (service, le) (rate(http_server_requests_seconds_bucket{job="users-service", uri!~"/actuator.*"}[30s]))) > 0.3
+          or
+          label_replace(histogram_quantile(0.95, sum by (le) (rate(dancesync_http_request_duration_seconds_bucket{route!~"/api/battles/health.*"}[30s]))), "service", "battle-service", "", "") > 0.3
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "HTTP p95 of {{ $labels.service }} is {{ $value | humanizeDuration }} (target 300 ms)"
+
+      - alert: HighRealtimeLatency
+        # Per replica: a single degraded replica fires it even when the other one is fine.
+        expr: histogram_quantile(0.95, sum by (instance, le) (rate(dancesync_socket_event_duration_seconds_bucket[30s]))) > 0.3
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Socket.IO event p95 on {{ $labels.instance }} is {{ $value | humanizeDuration }} (target 300 ms)"
+
+  - name: dancesync-errors
+    rules:
+      - alert: HighErrorRate
+        # 5xx responses of every service plus battle-service errors, over every HTTP request and Socket.IO event.
+        expr: |
+          (
+            sum(rate(http_server_requests_seconds_count{status=~"5..", uri!~"/actuator.*"}[30s])) or vector(0)
+          ) + (
+            sum(rate(dancesync_http_request_duration_seconds_count{status=~"5.."}[30s])) or vector(0)
+          ) + (
+            sum(rate(dancesync_errors_total[30s])) or vector(0)
+          )
+          > 0.05 * (
+            (sum(rate(http_server_requests_seconds_count{uri!~"/actuator.*"}[30s])) or vector(0))
+            + (sum(rate(dancesync_http_request_duration_seconds_count[30s])) or vector(0))
+            + (sum(rate(dancesync_socket_events_total[30s])) or vector(0))
+          )
+        for: 15s
+        labels:
+          severity: warning
+        annotations:
+          summary: "More than 5 % of the requests and events fail"

@@ -1,0 +1,12 @@
+# OBS-1: the business and technical dashboards are versioned JSON files (observability/grafana/dashboards).
+apiVersion: 1
+
+providers:
+  - name: dancesync
+    folder: DanceSync
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
