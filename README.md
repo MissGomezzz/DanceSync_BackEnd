@@ -115,6 +115,7 @@ Defaults live in `.env.example`; every service falls back to the same values whe
 |---|---|---|
 | `POSTGRES_DB` / `POSTGRES_USER` / `POSTGRES_PASSWORD` | `dancesync` | docker-compose, users-service |
 | `POSTGRES_HOST` / `POSTGRES_PORT` | `localhost` / `5432` | users-service |
+| `POSTGRES_SSLMODE` | `prefer` | users-service (`require` for Azure Database for PostgreSQL, which refuses unencrypted connections) |
 | `GATEWAY_PORT` | `8080` | api-gateway |
 | `USERS_SERVICE_PORT` | `8081` | users-service |
 | `USERS_SERVICE_URL` | `http://localhost:8081` | api-gateway, battle-service |
@@ -148,6 +149,14 @@ Defaults live in `.env.example`; every service falls back to the same values whe
 | `RATE_LIMIT_ENABLED` | `true` | api-gateway (SEG-3; HTTP rate limit per client address) |
 | `RATE_LIMIT_<POLICY>_PER_SECOND` / `_BURST` | see `.env.example` | api-gateway (SEG-3; policies `ROOM_CREATE`, `GUEST_TOKEN`, `SOCKET_HANDSHAKE`, `SOCKET_POLLING`, `OTHER`) |
 | `REDIS_URL` (api-gateway) | empty | api-gateway (SEG-3; shared rate limit buckets; empty = this instance's memory) |
+| `AUDIT_INTERNAL_TOKEN` | empty | api-gateway, battle-service, users-service (SEG-2; shared secret, at least 32 bytes, the same in the three: producers send audit batches with it and the gateway adds it to the admin API. Empty = records wait in memory and the admin API answers 503) |
+| `ADMIN_USER_OID` | empty | api-gateway (SEG-2; Entra ID object id of the **single** admin account, the only one that reaches `/api/admin/**`. Empty = nobody is admin) |
+| `AUDIT_CHAIN_KEY` | empty | users-service (SEG-2; HMAC key of the audit hash chain, at least 32 bytes. Empty = plain SHA-256) |
+| `GEOIP_DB_PATH` | `/app/geoip/dbip-lite.mmdb` in the image | users-service (SEG-2; local GeoIP database in MaxMind format. The Docker image downloads DB-IP City Lite at build time; outside Docker use `scripts/download-geoip.sh`. Missing file = public regions recorded as "unknown") |
+| `PROMETHEUS_URL` | empty | users-service (SEG-2; Prometheus of OBS-1, for the operational alerts of the admin screen) |
+| `AUDIT_VERIFY_INTERVAL` | `PT5M` | users-service (SEG-2; how often the whole audit chain is verified in the background) |
+| `AUDIT_ENABLED` / `AUDIT_FLUSH_INTERVAL` | `true` / `PT1S` | api-gateway (SEG-2; record every request, how often batches are sent) |
+| `AUDIT_ENABLED` / `AUDIT_FLUSH_INTERVAL_MS` / `AUDIT_BATCH_SIZE` / `AUDIT_BUFFER_CAPACITY` | `true` / `1000` / `200` / `20000` | battle-service (SEG-2; audit batches to users-service and the bounded buffer used while it is unreachable) |
 
 `battle-service` reads its own `battle-service/.env` (see `battle-service/.env.example`). `RATING_GRACE_MS` no longer exists: a battle ends exactly when the song clip ends. `USERS_SERVICE_URL` is also where battle-service stores finished matches (`PUT /api/matches/{battleId}`, service to service).
 
@@ -449,6 +458,15 @@ node scripts/obs-metrics-lag.mjs && node scripts/obs-trace.mjs && node scripts/o
 ![OBS-1 scorecard: metrics visible in 5.0 s at worst, alert firing in 29.7 s at worst, 3 of 3 services traced](load-tests/reports/charts/obs1-scorecard.svg)
 
 Known limitation: the gateway's security audit lines (`dancesync.security.audit`, owned by the audit scope) keep their previous text format; every other log line is JSON.
+
+## Non-repudiation and admin console (SEG-2)
+
+Quality scenario SEG-2 is documented, with its tests and evidence, in [docs/quality/SEG-2-no-repudio.md](docs/quality/SEG-2-no-repudio.md); the decision behind it is [ADR-09](docs/adr/ADR-09-auditoria-encadenada.md). In short:
+
+- **Every request is recorded**: the api-gateway records each HTTP request (refused ones included) and battle-service each Socket.IO handshake and event, with the user from the token, the client address, the UTC time of the server and the browser. users-service adds the region (local GeoIP) and appends the record to a **hash chain** (`audit_log`, HMAC-SHA256) that the database keeps **append-only**.
+- **Verification**: the whole chain is walked every 5 minutes and on demand; a deleted, inserted or modified record is named. Prometheus alerts on a broken chain, a chain that goes back, or records dropped by a producer.
+- **Admin console** (`/admin` in the frontend): only the single account named by `ADMIN_USER_OID` gets in. Overview (activity, outcomes, top users, addresses with incidents, chain integrity with "Verify now"), the audit log (filters, record detail with its hashes, live mode, CSV export) and the alerts (security alerts derived from the audit log plus the Prometheus rules).
+- **API** (through the gateway): `GET /api/me` for any session (who am I, `admin: true|false`; the frontend asks here, so regular users never hit a 403); admin only: `GET /api/admin/session`, `GET /api/admin/audit/records`, `GET /api/admin/audit/summary`, `POST /api/admin/audit/verify`, `GET /api/admin/alerts`. Producers deliver to `POST /internal/audit/events` on users-service, which the gateway does not route.
 
 ## Abuse and denial-of-service protection (SEG-3)
 

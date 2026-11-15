@@ -44,6 +44,8 @@ import { createAccessLog } from "./infrastructure/http/accessLog.js";
 import { PromMetrics } from "./infrastructure/metrics/PromMetrics.js";
 import { startMetricsServer } from "./infrastructure/metrics/metricsServer.js";
 import { countingAbuseAudit, countingAuthAudit } from "./infrastructure/metrics/countingAudits.js";
+import { loadAuditConfig } from "./infrastructure/audit/auditConfig.js";
+import { HttpAuditShipper } from "./infrastructure/audit/HttpAuditShipper.js";
 
 // Wiring: adapters -> use cases -> entry points.
 // REDIS_URL set: room and word race state in Redis (several instances). Not set: in memory, as before.
@@ -95,6 +97,18 @@ if (!env.auth.guest) {
   logger.warn({}, "GUEST_TOKEN_SECRET is not set: guest tokens are neither issued nor accepted");
 }
 
+// SEG-2, non-repudiation: every handshake and client event goes to the audit log of users-service,
+// in batches, off the event path. Without AUDIT_INTERNAL_TOKEN the records wait in memory.
+const abuseConfig = loadAbuseConfig();
+const auditConfig = loadAuditConfig();
+const auditTrail = new HttpAuditShipper(auditConfig, {
+  logger,
+  onResult: (result, count) => metrics.auditRecords(result, count),
+});
+if (auditConfig.enabled && !auditConfig.internalToken) {
+  logger.warn({}, "AUDIT_INTERNAL_TOKEN is not set: audit records are kept in memory and not delivered");
+}
+
 const app = express();
 // OBS-1: first, so every request (CORS preflights and errors included) gets its access line.
 app.use(
@@ -132,7 +146,13 @@ const wordRaceScheduler = new WordRaceScheduler({
   metrics,
 });
 const socketHandlers = registerSocketHandlers(io, {
-  authenticateHandshake: createHandshakeAuth({ verifier: tokenVerifier, audit: authAudit, logger }),
+  authenticateHandshake: createHandshakeAuth({
+    verifier: tokenVerifier,
+    audit: authAudit,
+    logger,
+    trail: auditTrail,
+    trustedProxyHops: abuseConfig.trustedProxyHops,
+  }),
   authAudit,
   joinRoom,
   startBattle,
@@ -165,15 +185,18 @@ const socketHandlers = registerSocketHandlers(io, {
   logger,
   metrics,
   sessions: stateStores.sessions,
+  auditTrail,
+  trustedProxyHops: abuseConfig.trustedProxyHops,
 });
 // SEG-3: after the handshake authentication, so the block check knows who connects.
 // Every event goes through a token bucket before any handler; clients that keep
 // flooding are blocked (shared through Redis when REDIS_URL is set) and disconnected.
 attachAbuseProtection(io, {
-  config: loadAbuseConfig(),
+  config: abuseConfig,
   blocks: stateStores.blocks,
   audit: countingAbuseAudit(consoleAbuseAudit, metrics),
   logger,
+  trail: auditTrail,
 });
 
 // HTTP routes go after the socket handlers so a created room can be watched:
@@ -219,7 +242,11 @@ function shutdown(signal: string): void {
   io.close();
   void metricsServer.then((server) => server?.close());
   httpServer.close(() => {
-    void stateStores.close().finally(() => process.exit(0));
+    // SEG-2: deliver the last audit records before the replica goes away.
+    void auditTrail
+      .close()
+      .then(() => stateStores.close())
+      .finally(() => process.exit(0));
   });
 }
 process.on("SIGINT", () => shutdown("SIGINT"));

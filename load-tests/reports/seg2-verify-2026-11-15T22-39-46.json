@@ -1,0 +1,482 @@
+{
+  "scenario": "SEG-2 non-repudiation",
+  "at": "2026-11-15T22:39:46.263Z",
+  "gateway": "http://localhost:18080",
+  "actions": 9,
+  "recorded": 9,
+  "allFiveFields": true,
+  "allAsExpected": true,
+  "attributionMs": {
+    "max": 1171,
+    "avg": 965,
+    "target": 60000
+  },
+  "chainBeforeTamper": {
+    "valid": true,
+    "checked": 18,
+    "headSeq": 18,
+    "headHash": "991e1e0bc8c5f1871128f1e08167fcdb17b933337f37f59413dcbf710ed0a0f4",
+    "firstBrokenSeq": null,
+    "problem": null,
+    "verifiedAt": "2026-11-15T22:39:42.185130456Z",
+    "durationMs": 7
+  },
+  "tamper": {
+    "alertMs": {
+      "security": 154,
+      "prometheus": 3266
+    },
+    "target": 3,
+    "plainUpdateRefused": true,
+    "plainDeleteRefused": true,
+    "afterBypass": {
+      "valid": false,
+      "checked": 26,
+      "headSeq": 26,
+      "headHash": "bda62e923e77f92537f81a87d2829ff175afeb20a25e9b3c7cc31e4cf57a571e",
+      "firstBrokenSeq": 3,
+      "problem": "ALTERED_RECORD",
+      "verifiedAt": "2026-11-15T22:39:42.986543199Z",
+      "durationMs": 7
+    },
+    "detected": true
+  },
+  "results": [
+    {
+      "description": "HTTP: create a room (registered user)",
+      "correlationId": "seg2-mwif31cj-1",
+      "at": 1794782380674,
+      "status": 201,
+      "expected": {
+        "userId": "seg2-ana-mwif31cj",
+        "ip": "8.8.8.8",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "outcome": "ok",
+        "action": "POST /api/rooms"
+      },
+      "record": {
+        "seq": 3,
+        "eventId": "622b7326-6943-4e51-ae5f-a8c3e20fde10",
+        "occurredAt": "2026-11-15T22:39:40.683Z",
+        "recordedAt": "2026-11-15T22:39:40.815Z",
+        "source": "api-gateway@516ea031380b",
+        "channel": "http",
+        "action": "POST /api/rooms",
+        "resource": "/api/rooms",
+        "outcome": "ok",
+        "status": 201,
+        "code": null,
+        "userId": "seg2-ana-mwif31cj",
+        "userKind": "user",
+        "userName": "Ana SEG-2",
+        "ip": "8.8.8.8",
+        "region": "Mountain View, California, United States (US)",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "correlationId": "seg2-mwif31cj-1",
+        "detail": null,
+        "prevHash": "e83e9d5507077262e60d1545242d28c5d8f9ff9807690f3f5d01997e4a978a1b",
+        "hash": "054cef86abfaaaec2b04e63bdb9b6390699d3df6dc88b65a96d927d051fba247"
+      },
+      "attributionMs": 463,
+      "checks": {
+        "fiveFields": true,
+        "detail": {
+          "user": true,
+          "ip": true,
+          "dateTimeUtc": true,
+          "region": true,
+          "browser": true
+        },
+        "asExpected": true,
+        "chained": true
+      }
+    },
+    {
+      "description": "HTTP: read the room",
+      "correlationId": "seg2-mwif31cj-2",
+      "at": 1794782380780,
+      "status": 200,
+      "expected": {
+        "userId": "seg2-ana-mwif31cj",
+        "ip": "8.8.8.8",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "outcome": "ok"
+      },
+      "record": {
+        "seq": 4,
+        "eventId": "11cf64b0-92df-4bd5-9e8d-15c2348a409a",
+        "occurredAt": "2026-11-15T22:39:40.783Z",
+        "recordedAt": "2026-11-15T22:39:40.845Z",
+        "source": "api-gateway@516ea031380b",
+        "channel": "http",
+        "action": "GET /api/rooms/RHDUE5",
+        "resource": "/api/rooms/RHDUE5",
+        "outcome": "ok",
+        "status": 200,
+        "code": null,
+        "userId": "seg2-ana-mwif31cj",
+        "userKind": "user",
+        "userName": "Ana SEG-2",
+        "ip": "8.8.8.8",
+        "region": "Mountain View, California, United States (US)",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "correlationId": "seg2-mwif31cj-2",
+        "detail": null,
+        "prevHash": "054cef86abfaaaec2b04e63bdb9b6390699d3df6dc88b65a96d927d051fba247",
+        "hash": "882f28f28d01cddfc990e5ceb30efee73b66e8aef123952cb51ba010cbe09c38"
+      },
+      "attributionMs": 382,
+      "checks": {
+        "fiveFields": true,
+        "detail": {
+          "user": true,
+          "ip": true,
+          "dateTimeUtc": true,
+          "region": true,
+          "browser": true
+        },
+        "asExpected": true,
+        "chained": true
+      }
+    },
+    {
+      "description": "HTTP: create a room without a token",
+      "correlationId": "seg2-mwif31cj-3",
+      "at": 1794782380841,
+      "status": 401,
+      "expected": {
+        "userId": null,
+        "ip": "198.18.77.66",
+        "userAgent": "curl/8.11.0",
+        "outcome": "rejected",
+        "code": "missing_token"
+      },
+      "record": {
+        "seq": 10,
+        "eventId": "688d8167-4224-41a3-bc68-24a18c184fb6",
+        "occurredAt": "2026-11-15T22:39:40.846Z",
+        "recordedAt": "2026-11-15T22:39:41.861Z",
+        "source": "api-gateway@516ea031380b",
+        "channel": "http",
+        "action": "POST /api/rooms",
+        "resource": "/api/rooms",
+        "outcome": "rejected",
+        "status": 401,
+        "code": "missing_token",
+        "userId": null,
+        "userKind": "anonymous",
+        "userName": null,
+        "ip": "198.18.77.66",
+        "region": "unknown",
+        "userAgent": "curl/8.11.0",
+        "correlationId": "seg2-mwif31cj-3",
+        "detail": null,
+        "prevHash": "0d9e69c542d6c1812a4f5e9c803b4dc5183d78977452ebc5f2cf3560b0134739",
+        "hash": "33de41d0e01c56d5ac1390bacca2c6340f537ecdceda9a1101271a3d54ed7aed"
+      },
+      "attributionMs": 1171,
+      "checks": {
+        "fiveFields": true,
+        "detail": {
+          "user": true,
+          "ip": true,
+          "dateTimeUtc": true,
+          "region": true,
+          "browser": true
+        },
+        "asExpected": true,
+        "chained": true
+      }
+    },
+    {
+      "description": "HTTP: a non-admin opens the admin API",
+      "correlationId": "seg2-mwif31cj-4",
+      "at": 1794782380874,
+      "status": 403,
+      "expected": {
+        "userId": "seg2-ana-mwif31cj",
+        "ip": "8.8.8.8",
+        "outcome": "rejected",
+        "code": "not_admin"
+      },
+      "record": {
+        "seq": 11,
+        "eventId": "bfcb9a38-650f-4023-bd5b-d3acf0dfc47e",
+        "occurredAt": "2026-11-15T22:39:40.878Z",
+        "recordedAt": "2026-11-15T22:39:41.861Z",
+        "source": "api-gateway@516ea031380b",
+        "channel": "http",
+        "action": "GET /api/admin/audit/records",
+        "resource": "/api/admin/audit/records",
+        "outcome": "rejected",
+        "status": 403,
+        "code": "not_admin",
+        "userId": "seg2-ana-mwif31cj",
+        "userKind": "user",
+        "userName": "Ana SEG-2",
+        "ip": "8.8.8.8",
+        "region": "Mountain View, California, United States (US)",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "correlationId": "seg2-mwif31cj-4",
+        "detail": null,
+        "prevHash": "33de41d0e01c56d5ac1390bacca2c6340f537ecdceda9a1101271a3d54ed7aed",
+        "hash": "95043db1d1279c7627fa013c45a9d3692cb86e0fa85cf4d6178fae886061d514"
+      },
+      "attributionMs": 1162,
+      "checks": {
+        "fiveFields": true,
+        "detail": {
+          "user": true,
+          "ip": true,
+          "dateTimeUtc": true,
+          "region": true,
+          "browser": true
+        },
+        "asExpected": true,
+        "chained": true
+      }
+    },
+    {
+      "description": "Socket.IO: handshake",
+      "correlationId": "seg2-mwif31cj-5",
+      "at": 1794782380890,
+      "expected": {
+        "userId": "seg2-ana-mwif31cj",
+        "ip": "8.8.8.8",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "outcome": "ok",
+        "action": "socket:handshake"
+      },
+      "record": {
+        "seq": 6,
+        "eventId": "a21a0061-4f36-4e96-8414-6a60e1fc8923",
+        "occurredAt": "2026-11-15T22:39:41.025Z",
+        "recordedAt": "2026-11-15T22:39:41.809Z",
+        "source": "battle-service@5ed0c0495f6e",
+        "channel": "socket.io",
+        "action": "socket:handshake",
+        "resource": null,
+        "outcome": "ok",
+        "status": null,
+        "code": null,
+        "userId": "seg2-ana-mwif31cj",
+        "userKind": "user",
+        "userName": "Ana SEG-2",
+        "ip": "8.8.8.8",
+        "region": "Mountain View, California, United States (US)",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "correlationId": "seg2-mwif31cj-5",
+        "detail": null,
+        "prevHash": "b66202767b2b59f8e0e4b3e9a98c54bcdd29675dfcc7ec2a4348cac897267da5",
+        "hash": "0771f74bef1dfa13c37eef39733a4920172eb6649f61f60f7749b0a7c816f19f"
+      },
+      "attributionMs": 1169,
+      "checks": {
+        "fiveFields": true,
+        "detail": {
+          "user": true,
+          "ip": true,
+          "dateTimeUtc": true,
+          "region": true,
+          "browser": true
+        },
+        "asExpected": true,
+        "chained": true
+      }
+    },
+    {
+      "description": "Socket.IO: room:join",
+      "correlationId": "seg2-mwif31cj-5",
+      "at": 1794782381026,
+      "expected": {
+        "userId": "seg2-ana-mwif31cj",
+        "ip": "8.8.8.8",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "outcome": "ok",
+        "action": "room:join"
+      },
+      "record": {
+        "seq": 7,
+        "eventId": "7133327b-4d0b-4b8c-9a9f-f0b96999bd73",
+        "occurredAt": "2026-11-15T22:39:41.033Z",
+        "recordedAt": "2026-11-15T22:39:41.809Z",
+        "source": "battle-service@5ed0c0495f6e",
+        "channel": "socket.io",
+        "action": "room:join",
+        "resource": "RHDUE5",
+        "outcome": "ok",
+        "status": null,
+        "code": null,
+        "userId": "seg2-ana-mwif31cj",
+        "userKind": "user",
+        "userName": "Ana SEG-2",
+        "ip": "8.8.8.8",
+        "region": "Mountain View, California, United States (US)",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "correlationId": "seg2-mwif31cj-5",
+        "detail": null,
+        "prevHash": "0771f74bef1dfa13c37eef39733a4920172eb6649f61f60f7749b0a7c816f19f",
+        "hash": "78cc8cb1f645646216836949ebc9a998987ed8487a800c7560a5c7d3b2bdb827"
+      },
+      "attributionMs": 1058,
+      "checks": {
+        "fiveFields": true,
+        "detail": {
+          "user": true,
+          "ip": true,
+          "dateTimeUtc": true,
+          "region": true,
+          "browser": true
+        },
+        "asExpected": true,
+        "chained": true
+      }
+    },
+    {
+      "description": "Socket.IO: chat:message",
+      "correlationId": "seg2-mwif31cj-5",
+      "at": 1794782381035,
+      "expected": {
+        "userId": "seg2-ana-mwif31cj",
+        "ip": "8.8.8.8",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "outcome": "ok",
+        "action": "chat:message"
+      },
+      "record": {
+        "seq": 8,
+        "eventId": "ea45f775-ab77-464f-ad3e-3e0f9ba8d67c",
+        "occurredAt": "2026-11-15T22:39:41.038Z",
+        "recordedAt": "2026-11-15T22:39:41.809Z",
+        "source": "battle-service@5ed0c0495f6e",
+        "channel": "socket.io",
+        "action": "chat:message",
+        "resource": "RHDUE5",
+        "outcome": "ok",
+        "status": null,
+        "code": null,
+        "userId": "seg2-ana-mwif31cj",
+        "userKind": "user",
+        "userName": "Ana SEG-2",
+        "ip": "8.8.8.8",
+        "region": "Mountain View, California, United States (US)",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "correlationId": "seg2-mwif31cj-5",
+        "detail": "length=10",
+        "prevHash": "78cc8cb1f645646216836949ebc9a998987ed8487a800c7560a5c7d3b2bdb827",
+        "hash": "990893374f2a37b9805efe0ea99829f5a7f5c394b338cdb706f98e776587a292"
+      },
+      "attributionMs": 1075,
+      "checks": {
+        "fiveFields": true,
+        "detail": {
+          "user": true,
+          "ip": true,
+          "dateTimeUtc": true,
+          "region": true,
+          "browser": true
+        },
+        "asExpected": true,
+        "chained": true
+      }
+    },
+    {
+      "description": "Socket.IO: role:select",
+      "correlationId": "seg2-mwif31cj-5",
+      "at": 1794782381039,
+      "expected": {
+        "userId": "seg2-ana-mwif31cj",
+        "ip": "8.8.8.8",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "outcome": "ok",
+        "action": "role:select"
+      },
+      "record": {
+        "seq": 9,
+        "eventId": "8073661f-acdb-4b94-8222-786c9fa0acdc",
+        "occurredAt": "2026-11-15T22:39:41.043Z",
+        "recordedAt": "2026-11-15T22:39:41.809Z",
+        "source": "battle-service@5ed0c0495f6e",
+        "channel": "socket.io",
+        "action": "role:select",
+        "resource": "RHDUE5",
+        "outcome": "ok",
+        "status": null,
+        "code": null,
+        "userId": "seg2-ana-mwif31cj",
+        "userKind": "user",
+        "userName": "Ana SEG-2",
+        "ip": "8.8.8.8",
+        "region": "Mountain View, California, United States (US)",
+        "userAgent": "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0",
+        "correlationId": "seg2-mwif31cj-5",
+        "detail": "role=dancer",
+        "prevHash": "990893374f2a37b9805efe0ea99829f5a7f5c394b338cdb706f98e776587a292",
+        "hash": "0d9e69c542d6c1812a4f5e9c803b4dc5183d78977452ebc5f2cf3560b0134739"
+      },
+      "attributionMs": 1095,
+      "checks": {
+        "fiveFields": true,
+        "detail": {
+          "user": true,
+          "ip": true,
+          "dateTimeUtc": true,
+          "region": true,
+          "browser": true
+        },
+        "asExpected": true,
+        "chained": true
+      }
+    },
+    {
+      "description": "Socket.IO: handshake with an expired token",
+      "correlationId": "seg2-mwif31cj-6",
+      "at": 1794782381047,
+      "expected": {
+        "userId": null,
+        "ip": "198.18.77.66",
+        "userAgent": "curl/8.11.0",
+        "outcome": "rejected",
+        "action": "socket:handshake",
+        "code": "expired_token"
+      },
+      "record": {
+        "seq": 5,
+        "eventId": "1c934379-8123-41f9-ab5d-a0300d5dc466",
+        "occurredAt": "2026-11-15T22:39:41.081Z",
+        "recordedAt": "2026-11-15T22:39:41.641Z",
+        "source": "battle-service@c37d60166c80",
+        "channel": "socket.io",
+        "action": "socket:handshake",
+        "resource": null,
+        "outcome": "rejected",
+        "status": null,
+        "code": "expired_token",
+        "userId": null,
+        "userKind": "anonymous",
+        "userName": null,
+        "ip": "198.18.77.66",
+        "region": "unknown",
+        "userAgent": "curl/8.11.0",
+        "correlationId": "seg2-mwif31cj-6",
+        "detail": null,
+        "prevHash": "882f28f28d01cddfc990e5ceb30efee73b66e8aef123952cb51ba010cbe09c38",
+        "hash": "b66202767b2b59f8e0e4b3e9a98c54bcdd29675dfcc7ec2a4348cac897267da5"
+      },
+      "attributionMs": 1113,
+      "checks": {
+        "fiveFields": true,
+        "detail": {
+          "user": true,
+          "ip": true,
+          "dateTimeUtc": true,
+          "region": true,
+          "browser": true
+        },
+        "asExpected": true,
+        "chained": true
+      }
+    }
+  ],
+  "pass": true
+}

@@ -5,7 +5,9 @@ spring:
   application:
     name: users-service
   datasource:
-    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:dancesync}
+    # POSTGRES_SSLMODE: "require" for Azure Database for PostgreSQL (it refuses unencrypted
+    # connections); "prefer" (default) uses TLS when the server offers it, e.g. not on local Docker.
+    url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:dancesync}?sslmode=${POSTGRES_SSLMODE:prefer}
     username: ${POSTGRES_USER:dancesync}
     password: ${POSTGRES_PASSWORD:dancesync}
     driver-class-name: org.postgresql.Driver
@@ -17,6 +19,22 @@ spring:
     enabled: true
     locations: classpath:db/migration
     baseline-on-migrate: false
+
+# SEG-2, non-repudiation: the append-only, hash-chained audit log fed by the api-gateway and
+# battle-service, and the admin screen's API. Whatever is left empty fails closed or degrades
+# visibly (see AuditProperties).
+dancesync:
+  audit:
+    # Shared secret of /internal/audit/events (producers) and /api/admin/** (forwarded by the
+    # gateway). At least 32 bytes, the same in the three services. Empty = both refused.
+    internal-token: ${AUDIT_INTERNAL_TOKEN:}
+    # HMAC key of the hash chain (at least 32 bytes). Empty = plain SHA-256.
+    chain-key: ${AUDIT_CHAIN_KEY:}
+    # Local GeoIP database in MaxMind format (scripts/download-geoip.sh). Empty = region "unknown".
+    geoip-db-path: ${GEOIP_DB_PATH:}
+    # Prometheus of OBS-1, for the operational alerts of the admin screen. Empty = not shown.
+    prometheus-url: ${PROMETHEUS_URL:}
+    verify-interval: ${AUDIT_VERIFY_INTERVAL:PT5M}
 
 # OBS-1: one JSON object per line (Elastic Common Schema): @timestamp, log.level,
 # service.name, message, plus the MDC (correlationId) and the key-value pairs of each line.

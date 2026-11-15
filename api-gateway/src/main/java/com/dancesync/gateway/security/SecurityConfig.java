@@ -1,5 +1,6 @@
 package com.dancesync.gateway.security;
 
+import com.dancesync.gateway.audit.AuditTrailFilter;
 import com.dancesync.gateway.ratelimit.HttpRateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -82,6 +83,8 @@ public class SecurityConfig {
 
     static final GrantedAuthority USER = new SimpleGrantedAuthority("ROLE_USER");
     static final GrantedAuthority GUEST = new SimpleGrantedAuthority("ROLE_GUEST");
+    /** SEG-2: the single admin account (ADMIN_USER_OID), on top of ROLE_USER. */
+    static final GrantedAuthority ADMIN = new SimpleGrantedAuthority("ROLE_ADMIN");
     /** Claim of the guest token naming the only room it is valid for. */
     static final String ROOM_CLAIM = "room";
 
@@ -100,6 +103,8 @@ public class SecurityConfig {
                 // SEG-3: per-address rate limit after CORS (a 429 stays readable by the browser) and
                 // before authentication (a flood of forged tokens never reaches signature checks).
                 .addFilterBefore(rateLimiter::filter, SecurityWebFiltersOrder.AUTHENTICATION)
+                // SEG-2: hands the validated identity to the audit trail, which wraps this chain.
+                .addFilterAfter(AuditTrailFilter::captureIdentity, SecurityWebFiltersOrder.AUTHENTICATION)
                 .authorizeExchange(exchanges -> exchanges
                         .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .pathMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**",
@@ -108,6 +113,10 @@ public class SecurityConfig {
                         .pathMatchers(HttpMethod.POST, "/api/rooms/{code}/guest-token", "/api/rooms/{code}/leave")
                         .permitAll()
                         .pathMatchers("/api/rooms/{code}", "/api/rooms/{code}/**").access(SecurityConfig::roomAccess)
+                        // SEG-2: who am I (and am I the admin), for any valid token, answered by the gateway.
+                        .pathMatchers(HttpMethod.GET, "/api/me").authenticated()
+                        // SEG-2: the admin screen (audit log, alerts) is for the single admin account.
+                        .pathMatchers("/api/admin", "/api/admin/**").hasRole("ADMIN")
                         // Everything else (creating rooms, match history, users, actuator) is for registered users.
                         .anyExchange().hasRole("USER"))
                 .oauth2ResourceServer(server -> server
@@ -154,14 +163,17 @@ public class SecurityConfig {
         AuthProperties.Entra entra = properties.entra();
         ReactiveAuthenticationManager anyTenant = null;
         if (entra.configured() && entra.anyTenant()) {
-            anyTenant = entraManager(entra, anyTenantIssuerValidator(entra.allowsPersonalAccounts()));
+            anyTenant = entraManager(entra, anyTenantIssuerValidator(entra.allowsPersonalAccounts()), properties.admin());
             log.info("Accepting Microsoft Entra ID users of any organization{}",
                     entra.allowsPersonalAccounts() ? " and personal Microsoft accounts" : "");
         } else if (entra.configured()) {
             byIssuer.put(entra.resolvedIssuer(),
-                    entraManager(entra, JwtValidators.createDefaultWithIssuer(entra.resolvedIssuer())));
+                    entraManager(entra, JwtValidators.createDefaultWithIssuer(entra.resolvedIssuer()), properties.admin()));
         } else {
             log.warn("AZURE_TENANT_ID / AZURE_CLIENT_ID are not set: every registered-user token will be refused");
+        }
+        if (!properties.admin().configured()) {
+            log.warn("ADMIN_USER_OID is not set: nobody can open the admin screen");
         }
         if (properties.guest().configured()) {
             byIssuer.put(properties.guest().issuer(), guestManager(properties.guest()));
@@ -196,7 +208,8 @@ public class SecurityConfig {
     }
 
     private static ReactiveAuthenticationManager entraManager(AuthProperties.Entra entra,
-                                                              OAuth2TokenValidator<Jwt> issuerValidator) {
+                                                              OAuth2TokenValidator<Jwt> issuerValidator,
+                                                              AuthProperties.Admin admin) {
         // Keys are fetched from the tenant's JWKS on first use and cached; only RS256 is accepted,
         // so an unsigned token or one "signed" with the public key as an HMAC secret is refused.
         NimbusReactiveJwtDecoder decoder = NimbusReactiveJwtDecoder.withJwkSetUri(entra.resolvedJwkSetUri())
@@ -206,7 +219,10 @@ public class SecurityConfig {
                 issuerValidator,
                 audienceValidator(entra.resolvedAudiences())));
         // "oid" identifies the user in the tenant; it is the player id battle-service uses too.
-        return manager(decoder, USER, jwt -> jwt.hasClaim("oid") ? jwt.getClaimAsString("oid") : jwt.getSubject());
+        // The one account named by ADMIN_USER_OID is also ROLE_ADMIN (SEG-2).
+        java.util.function.Function<Jwt, String> oid =
+                jwt -> jwt.hasClaim("oid") ? jwt.getClaimAsString("oid") : jwt.getSubject();
+        return manager(decoder, jwt -> admin.isAdmin(oid.apply(jwt)) ? List.of(USER, ADMIN) : List.of(USER), oid);
     }
 
     private static ReactiveAuthenticationManager guestManager(AuthProperties.Guest guest) {
@@ -218,14 +234,15 @@ public class SecurityConfig {
                 JwtValidators.createDefaultWithIssuer(guest.issuer()),
                 audienceValidator(List.of(guest.audience())),
                 new JwtClaimValidator<String>(ROOM_CLAIM, room -> room != null && !room.isBlank())));
-        return manager(decoder, GUEST, Jwt::getSubject);
+        return manager(decoder, jwt -> List.of(GUEST), Jwt::getSubject);
     }
 
-    private static ReactiveAuthenticationManager manager(NimbusReactiveJwtDecoder decoder, GrantedAuthority role,
+    private static ReactiveAuthenticationManager manager(NimbusReactiveJwtDecoder decoder,
+                                                         java.util.function.Function<Jwt, List<GrantedAuthority>> roles,
                                                          java.util.function.Function<Jwt, String> principal) {
         JwtReactiveAuthenticationManager manager = new JwtReactiveAuthenticationManager(decoder);
         manager.setJwtAuthenticationConverter(new ReactiveJwtAuthenticationConverterAdapter(
-                jwt -> new JwtAuthenticationToken(jwt, List.of(role), principal.apply(jwt))));
+                jwt -> new JwtAuthenticationToken(jwt, roles.apply(jwt), principal.apply(jwt))));
         return manager;
     }
 

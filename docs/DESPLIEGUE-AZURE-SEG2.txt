@@ -1,0 +1,341 @@
+=====================================================================================
+ DanceSync - Despliegue en Azure de SEG-2 (no repudio) y del panel de administración
+=====================================================================================
+
+Para: quien administra la suscripción de Azure de DanceSync (grupo de recursos
+rg-dancesync, entorno de Container Apps cae-dancesync).
+
+Qué hay que hacer, en resumen:
+  1. Generar dos secretos.
+  2. Preparar la base de datos en el PostgreSQL que ya existe (pgdancesyncsa33).
+  3. CREAR la Container App users-service (todavía no existe).
+  4. Agregar variables a api-gateway y battle-service (ya desplegados).
+  5. Hacer merge de la rama feat/seg2-audit a main (backend y frontend) para que el CI
+     despliegue el código nuevo de los tres servicios.
+  6. Verificar.
+
+El orden importa: el paso 3 va ANTES del merge. El workflow "Deploy users-service" solo
+actualiza una Container App que ya existe; si no existe, ese job falla.
+
+Tiempo estimado: 30-45 minutos.
+
+
+-------------------------------------------------------------------------------------
+ 0. ANTES DE EMPEZAR
+-------------------------------------------------------------------------------------
+
+Recomendado: usar Azure Cloud Shell en modo Bash (portal.azure.com, icono >_). Ya tiene
+az, openssl y git, así que los comandos de esta guía funcionan tal cual.
+
+Necesitas:
+  - Permisos sobre rg-dancesync (Contributor o superior).
+  - La contraseña del administrador del PostgreSQL pgdancesyncsa33.
+  - El Object ID del admin de DanceSync, que ya te lo pasaron:
+        03b0343e-fb80-4a57-8760-40435ed6f5b9
+
+Variables de trabajo (pégalas al abrir la terminal y vuelve a pegarlas si la cierras):
+
+    RG=rg-dancesync
+    ENV_NAME=cae-dancesync
+    PG_SERVER=pgdancesyncsa33
+    ADMIN_OID=03b0343e-fb80-4a57-8760-40435ed6f5b9
+    ACR=$(az acr list -g $RG --query "[0].name" -o tsv)
+    PG_USER=$(az postgres flexible-server show -g $RG -n $PG_SERVER --query administratorLogin -o tsv)
+    echo "ACR=$ACR  PG_USER=$PG_USER"
+
+ACR debe coincidir con la variable ACR_NAME del repositorio en GitHub (Settings >
+Secrets and variables > Actions > Variables). Si el grupo tiene varios registros, usa ese.
+
+    az extension add --name containerapp --upgrade
+
+
+-------------------------------------------------------------------------------------
+ 1. GENERAR LOS SECRETOS (una sola vez)
+-------------------------------------------------------------------------------------
+
+    AUDIT_INTERNAL_TOKEN=$(openssl rand -base64 48)
+    AUDIT_CHAIN_KEY=$(openssl rand -base64 48)
+    echo "AUDIT_INTERNAL_TOKEN=$AUDIT_INTERNAL_TOKEN"
+    echo "AUDIT_CHAIN_KEY=$AUDIT_CHAIN_KEY"
+
+GUARDA LOS DOS en un gestor de contraseñas. No los pegues en el chat del grupo ni en el
+repositorio.
+
+  - AUDIT_INTERNAL_TOKEN: secreto compartido entre los tres servicios. Con él, gateway y
+    battle-service envían los registros de auditoría a users-service, y el gateway reenvía
+    las peticiones del admin. Tiene que ser EXACTAMENTE el mismo en los tres.
+  - AUDIT_CHAIN_KEY: clave HMAC de la cadena de auditoría. Va solo en users-service.
+    >>> NUNCA LA CAMBIES NI LA PIERDAS. <<< Los registros ya guardados se verifican con
+    ella: si cambia, toda la cadena anterior aparece como "alterada".
+
+También necesitas la contraseña del PostgreSQL:
+
+    read -s -p "Contraseña de $PG_USER en $PG_SERVER: " PG_PASSWORD; echo
+
+
+-------------------------------------------------------------------------------------
+ 2. BASE DE DATOS (PostgreSQL existente pgdancesyncsa33)
+-------------------------------------------------------------------------------------
+
+2.1 Si el servidor está apagado (azure-availability.ps1 down -IncludePostgres lo apaga):
+
+    az postgres flexible-server show -g $RG -n $PG_SERVER --query state -o tsv
+    az postgres flexible-server start -g $RG -n $PG_SERVER      # solo si dice "Stopped"
+
+2.2 Crear la base de datos "dancesync" (si ya existe, el comando lo indica y no pasa nada):
+
+    az postgres flexible-server db create -g $RG -s $PG_SERVER -d dancesync
+
+2.3 Permitir que las Container Apps se conecten. Solo aplica si el servidor tiene acceso
+    público; si está en una red privada (VNet), no hace falta:
+
+    az postgres flexible-server show -g $RG -n $PG_SERVER --query network.publicNetworkAccess -o tsv
+    # Si dice "Enabled":
+    az postgres flexible-server firewall-rule create -g $RG -n $PG_SERVER \
+      --rule-name AllowAzureServices --start-ip-address 0.0.0.0 --end-ip-address 0.0.0.0
+
+No hay que crear tablas a mano: users-service las crea con Flyway al arrancar (usuarios,
+partidas y la tabla de auditoría audit_log, que es de solo anexar).
+
+
+-------------------------------------------------------------------------------------
+ 3. CREAR LA CONTAINER APP users-service
+-------------------------------------------------------------------------------------
+
+3.1 Construir la primera imagen desde la rama feat/seg2-audit (ya debe estar en GitHub):
+
+    git clone --branch feat/seg2-audit <URL-del-repo-DanceSync_BackEnd> dancesync-backend
+    cd dancesync-backend
+
+    # Opción A, sin Docker: compila dentro de Azure Container Registry.
+    az acr build -r $ACR -t users-service:inicial ./users-service
+
+    # Opción B, si la opción A dice que ACR Tasks no está disponible en la suscripción
+    # (pasa en algunas suscripciones de estudiante). Requiere Docker en tu máquina:
+    #   az acr login -n $ACR
+    #   docker build -t $ACR.azurecr.io/users-service:inicial ./users-service
+    #   docker push $ACR.azurecr.io/users-service:inicial
+
+La imagen trae la base GeoIP (DB-IP City Lite) para la región de cada IP auditada. Si
+DB-IP no respondiera durante la construcción, la imagen se construye igual y la región
+de las IP públicas sale "unknown".
+
+3.2 Revisa cómo descargan la imagen las otras apps, para usar la misma forma:
+
+    az containerapp show -g $RG -n api-gateway --query properties.configuration.registries -o json
+
+  - Si sale "identity": "system" (o el id de una identidad), usa --registry-identity system
+    (es lo que trae el comando de abajo).
+  - Si sale un "username" (credenciales de administrador del ACR), cambia la línea
+    --registry-identity system por:
+        --registry-username $(az acr credential show -n $ACR --query username -o tsv) \
+        --registry-password $(az acr credential show -n $ACR --query "passwords[0].value" -o tsv)
+
+3.3 Crear la app (ingreso INTERNO: solo la ven las apps del mismo entorno, no internet):
+
+    az containerapp create -g $RG -n users-service --environment $ENV_NAME \
+      --image $ACR.azurecr.io/users-service:inicial \
+      --registry-server $ACR.azurecr.io --registry-identity system \
+      --ingress internal --target-port 8081 --transport http \
+      --cpu 0.5 --memory 1.0Gi --min-replicas 1 --max-replicas 1 \
+      --secrets postgres-password="$PG_PASSWORD" \
+                audit-internal-token="$AUDIT_INTERNAL_TOKEN" \
+                audit-chain-key="$AUDIT_CHAIN_KEY" \
+      --env-vars POSTGRES_HOST=$PG_SERVER.postgres.database.azure.com \
+                 POSTGRES_PORT=5432 POSTGRES_DB=dancesync POSTGRES_USER=$PG_USER \
+                 POSTGRES_PASSWORD=secretref:postgres-password POSTGRES_SSLMODE=require \
+                 AUDIT_INTERNAL_TOKEN=secretref:audit-internal-token \
+                 AUDIT_CHAIN_KEY=secretref:audit-chain-key
+
+Notas:
+  - min-replicas 1: users-service recibe los registros de auditoría de forma continua; si
+    escala a cero, el primer lote espera a que arranque la JVM (20-40 s).
+  - Puede escalar a más de una réplica sin problema (la cadena se escribe bajo un bloqueo de
+    PostgreSQL), pero una basta.
+  - PROMETHEUS_URL se deja vacío: Prometheus y Grafana no se despliegan en Azure (OBS-1 es
+    local). El panel mostrará "Prometheus is not configured" en las alertas operativas, y las
+    alertas de seguridad sí funcionan. Es lo esperado.
+
+3.4 Comprobar que arrancó (espera 1-2 minutos):
+
+    az containerapp logs show -g $RG -n users-service --tail 80 | grep -E "Started|GeoIP|AUDIT_|ERROR|Flyway"
+
+  Debe aparecer:  "Started UsersServiceApplication"  y  "GeoIP database loaded".
+  No debe aparecer:  "AUDIT_INTERNAL_TOKEN is not set"  ni  "AUDIT_CHAIN_KEY is not set".
+  Si sale un error de conexión al PostgreSQL, revisa el paso 2 (servidor encendido, base
+  creada, regla de firewall, usuario y contraseña).
+
+3.5 (Opcional, recomendado) Sondas HTTP. Por defecto Container Apps sondea el puerto por
+    TCP. Para sondear también la base de datos: Portal > users-service > Containers >
+    Health probes > Liveness y Readiness: HTTP GET, puerto 8081, ruta /actuator/health.
+
+
+-------------------------------------------------------------------------------------
+ 4. VARIABLES DE LOS SERVICIOS QUE YA ESTÁN DESPLEGADOS
+-------------------------------------------------------------------------------------
+
+Primero mira lo que tienen ahora, para no pisar nada:
+
+    az containerapp show -g $RG -n api-gateway    --query "properties.template.containers[0].env" -o table
+    az containerapp show -g $RG -n battle-service --query "properties.template.containers[0].env" -o table
+
+4.1 api-gateway
+
+    az containerapp secret set -g $RG -n api-gateway \
+      --secrets audit-internal-token="$AUDIT_INTERNAL_TOKEN"
+
+    az containerapp update -g $RG -n api-gateway --set-env-vars \
+      AUDIT_INTERNAL_TOKEN=secretref:audit-internal-token \
+      ADMIN_USER_OID=$ADMIN_OID \
+      USERS_SERVICE_URL=http://users-service \
+      TRUSTED_PROXY_HOPS=1
+
+  - ADMIN_USER_OID: la ÚNICA cuenta que puede abrir el panel de administración.
+  - USERS_SERVICE_URL=http://users-service: dentro del entorno, una app se llama por su
+    nombre (el puerto 80 lleva al 8081 interno). Si ya tenía otro valor que apunte a
+    users-service, puede quedarse; tiene que ser alcanzable desde el gateway.
+  - TRUSTED_PROXY_HOPS=1: el ingreso de Container Apps es el único proxy delante del gateway.
+    Si ya tenía un valor, déjalo y confírmalo en el paso 6.4.
+  - FRONTEND_ORIGIN, AZURE_*, GUEST_TOKEN_SECRET y REDIS_URL no cambian.
+
+4.2 battle-service
+
+    az containerapp secret set -g $RG -n battle-service \
+      --secrets audit-internal-token="$AUDIT_INTERNAL_TOKEN"
+
+    az containerapp update -g $RG -n battle-service --set-env-vars \
+      AUDIT_INTERNAL_TOKEN=secretref:audit-internal-token \
+      USERS_SERVICE_URL=http://users-service \
+      TRUSTED_PROXY_HOPS=3
+
+  - TRUSTED_PROXY_HOPS=3: delante de battle-service están el ingreso del gateway, el gateway
+    y el ingreso del propio battle-service. Es el valor de partida; se confirma en el 6.4.
+  - USERS_SERVICE_URL: la misma que en el gateway. battle-service ya la usa para guardar
+    los resultados de las partidas.
+
+Estas variables se mantienen en los despliegues siguientes: el pipeline solo cambia la
+imagen. Ponerlas antes de desplegar el código nuevo no rompe nada (el código actual las
+ignora).
+
+
+-------------------------------------------------------------------------------------
+ 5. DESPLEGAR EL CÓDIGO
+-------------------------------------------------------------------------------------
+
+5.1 Backend: merge de feat/seg2-audit a main en DanceSync_BackEnd. Cuando "Backend CI"
+    termina en verde, despliega los tres servicios, users-service incluido (ahora ya existe).
+    Mira la pestaña Actions: deben quedar en verde "Deploy api-gateway", "Deploy
+    battle-service" y "Deploy users-service".
+
+5.2 Frontend: merge de feat/seg2-audit a main en DanceSync_FrontEnd y despliégalo como se
+    hace hoy (el repo solo tiene CI, no un workflow de despliegue). No hay variables VITE_
+    nuevas: se usan las mismas del despliegue actual (VITE_API_URL, VITE_WS_URL,
+    VITE_AZURE_CLIENT_ID, VITE_AZURE_TENANT_ID). El login de prueba local no existe en el
+    build de producción.
+
+
+-------------------------------------------------------------------------------------
+ 6. VERIFICAR
+-------------------------------------------------------------------------------------
+
+6.1 Salud:
+
+    curl -s https://api-gateway.wittybeach-53b16e7f.centralus.azurecontainerapps.io/api/battles/health
+    az containerapp logs show -g $RG -n users-service --tail 40
+
+6.2 Admin: abre el frontend, "Sign in with Microsoft" con la cuenta del admin. En el inicio
+    aparece el botón "Admin console".
+      - Overview > "Verify now": debe decir "Intact: N records verified".
+      - Audit log: aparecen tus propias peticiones (GET /api/me, GET /api/admin/...).
+
+    Si NO aparece "Admin console": abre las herramientas del navegador (F12) > pestaña
+    Network > recarga > clic en la petición "me". La respuesta muestra
+    {"userId": "...", "admin": false}. Ese userId es el que ve el backend; ponlo en
+    ADMIN_USER_OID del api-gateway (paso 4.1). Puede pasar con cuentas personales de
+    Microsoft (Outlook o Hotmail), cuyo id no coincide con el que muestra el portal.
+
+6.3 Otra cuenta: inicia sesión con alguien que NO sea el admin. No debe ver "Admin
+    console", y si abre /admin a mano vuelve al inicio.
+
+6.4 IP y región correctas (confirma TRUSTED_PROXY_HOPS). En el Audit log, revisa la columna
+    "IP / region" de tus propias acciones:
+      - Peticiones HTTP (acción "GET ..." o "POST ..."): las registra el gateway.
+      - Eventos de juego (room:join, chat:message, socket:handshake): las registra
+        battle-service.
+    Debe aparecer TU IP pública (compárala con https://ifconfig.me) y tu ciudad o país.
+      - Si sale "Private network" o una IP 10.x / 100.x / 172.x: súmale 1 a
+        TRUSTED_PROXY_HOPS en ese servicio.
+      - Si sale una IP que no es la tuya ni de Azure, o una que tú escribiste a mano en
+        X-Forwarded-For: réstale 1.
+    Cambiar la variable crea una revisión nueva en segundos:
+        az containerapp update -g $RG -n battle-service --set-env-vars TRUSTED_PROXY_HOPS=<n>
+
+6.5 Alertas: la pestaña Alerts muestra las alertas de seguridad (por ejemplo, muchas
+    peticiones sin token válido desde una IP). Las operativas dicen "Prometheus is not
+    configured", y es lo esperado en Azure.
+
+
+-------------------------------------------------------------------------------------
+ 7. LO QUE NO HAY QUE HACER
+-------------------------------------------------------------------------------------
+
+  - No cambiar ni perder AUDIT_CHAIN_KEY.
+  - No dar ingreso externo a users-service (debe seguir "internal").
+  - No borrar ni editar la tabla audit_log. PostgreSQL lo rechaza por diseño; si alguien lo
+    fuerza, el panel lo detecta y lo marca como cadena rota.
+  - No poner ADMIN_USER_OID en battle-service ni en users-service: solo lo usa el gateway.
+  - No hacer "azure-availability.ps1 down -IncludePostgres" si quieres que la auditoría siga
+    guardándose. Con el PostgreSQL apagado, gateway y battle-service siguen funcionando y
+    acumulan los registros en memoria (hasta 20.000 por instancia), y los entregan cuando
+    users-service vuelve.
+
+
+-------------------------------------------------------------------------------------
+ 8. SI ALGO FALLA
+-------------------------------------------------------------------------------------
+
+  - users-service no arranca: el juego sigue funcionando. El historial de partidas y la
+    auditoría esperan (battle-service guarda los resultados en su outbox de Redis y los
+    registros en memoria) y se entregan cuando users-service arranca. Revisa los logs
+    (paso 3.4).
+  - El panel abre pero dice "Could not load the overview: ... status 503" (o 401):
+    AUDIT_INTERNAL_TOKEN falta o no coincide entre api-gateway y users-service. Revisa los
+    secretos:
+        az containerapp secret list -g $RG -n api-gateway --show-values --query "[?name=='audit-internal-token']"
+        az containerapp secret list -g $RG -n users-service --show-values --query "[?name=='audit-internal-token']"
+    Si cambias un secreto, reinicia la revisión activa para que lo lea:
+        az containerapp revision restart -g $RG -n <app> \
+          --revision $(az containerapp show -g $RG -n <app> --query properties.latestRevisionName -o tsv)
+  - Volver atrás: activar la revisión anterior de cada app (Portal > app > Revisions) o
+    revertir el merge. Las variables nuevas no molestan al código viejo.
+
+
+-------------------------------------------------------------------------------------
+ RESUMEN DE VARIABLES
+-------------------------------------------------------------------------------------
+
+ users-service (NUEVA)
+   POSTGRES_HOST         pgdancesyncsa33.postgres.database.azure.com
+   POSTGRES_PORT         5432
+   POSTGRES_DB           dancesync
+   POSTGRES_USER         <admin del PostgreSQL>
+   POSTGRES_PASSWORD     secretref:postgres-password
+   POSTGRES_SSLMODE      require
+   AUDIT_INTERNAL_TOKEN  secretref:audit-internal-token   (mismo valor en los 3 servicios)
+   AUDIT_CHAIN_KEY       secretref:audit-chain-key        (no cambiarla nunca)
+   Ingreso: interno, puerto 8081.  CPU 0.5 / 1 GiB, 1 réplica.
+
+ api-gateway (AGREGAR)
+   AUDIT_INTERNAL_TOKEN  secretref:audit-internal-token
+   ADMIN_USER_OID        03b0343e-fb80-4a57-8760-40435ed6f5b9
+   USERS_SERVICE_URL     http://users-service
+   TRUSTED_PROXY_HOPS    1 (confirmar en 6.4)
+
+ battle-service (AGREGAR)
+   AUDIT_INTERNAL_TOKEN  secretref:audit-internal-token
+   USERS_SERVICE_URL     http://users-service
+   TRUSTED_PROXY_HOPS    3 (confirmar en 6.4)
+
+ Frontend: sin cambios de variables, solo volver a desplegar.
+
+Documentación: docs/quality/SEG-2-no-repudio.md y docs/adr/ADR-09-auditoria-encadenada.md

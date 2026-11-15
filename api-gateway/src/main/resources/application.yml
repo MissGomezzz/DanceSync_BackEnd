@@ -23,6 +23,14 @@ spring:
     gateway:
       server:
         webflux:
+          # SEG-2 / SEG-3: keep the X-Forwarded-For chain and append the address the gateway sees, so
+          # battle-service can tell the client's address. Spring Cloud Gateway keeps only the entries
+          # (and the connections) matching this pattern and removes the header otherwise; without it,
+          # every client looked like the gateway to battle-service (one SEG-3 block hit everyone and
+          # the audit log had no client address). It keeps them all: battle-service and the gateway
+          # pick the client's entry by counting TRUSTED_PROXY_HOPS from the right, so whatever a client
+          # forges further left is ignored anyway. Narrow it with GATEWAY_TRUSTED_PROXIES if needed.
+          trusted-proxies: ${GATEWAY_TRUSTED_PROXIES:.*}
           # OBS-1: spring_cloud_gateway_requests_seconds, per route and outcome.
           metrics:
             enabled: true
@@ -48,6 +56,14 @@ spring:
               predicates:
                 - Path=/api/matches,/api/matches/**
                 - Method=GET
+              filters:
+                - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Vary, RETAIN_UNIQUE
+            # SEG-2: the admin screen (audit log, alerts). Only ROLE_ADMIN gets here (SecurityConfig);
+            # InternalTokenRelay adds the internal secret users-service requires on this route only.
+            - id: users-service-admin
+              uri: ${USERS_SERVICE_URL:http://localhost:8081}
+              predicates:
+                - Path=/api/admin,/api/admin/**
               filters:
                 - DedupeResponseHeader=Access-Control-Allow-Origin Access-Control-Allow-Credentials Vary, RETAIN_UNIQUE
             - id: users-service
@@ -96,6 +112,20 @@ dancesync:
       secret: ${GUEST_TOKEN_SECRET:}
     cors:
       allowed-origin: ${FRONTEND_ORIGIN:http://localhost:5173}
+    # SEG-2: Entra ID object id (oid) of the single admin account. Empty = nobody is admin.
+    admin:
+      user-oid: ${ADMIN_USER_OID:}
+
+  # SEG-2, non-repudiation: one audit record per request (user from the token, client address,
+  # UTC time, User-Agent, action, outcome, correlation id), delivered in batches to users-service,
+  # which adds the region (GeoIP) and chains it. If users-service is down, records wait in a
+  # bounded buffer and are retried; requests are never slowed down or refused because of it.
+  audit:
+    enabled: ${AUDIT_ENABLED:true}
+    ingest-url: ${USERS_SERVICE_URL:http://localhost:8081}/internal/audit/events
+    # Shared secret of the internal calls (at least 32 bytes, the same in the three services).
+    internal-token: ${AUDIT_INTERNAL_TOKEN:}
+    flush-interval: ${AUDIT_FLUSH_INTERVAL:PT1S}
 
   # SEG-3, protection against abuse and denial of service: a token bucket per
   # client address and kind of request, answered 429 with Retry-After when empty.

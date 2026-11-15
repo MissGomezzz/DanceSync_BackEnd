@@ -19,7 +19,8 @@ import java.util.concurrent.CopyOnWriteArrayList;
 public final class UpstreamStub {
 
     /** One request that reached the service. */
-    public record Received(String method, String pathAndQuery, String authorization, String correlationId) {
+    public record Received(String method, String pathAndQuery, String authorization, String correlationId,
+                           String internalToken, String body, String forwardedFor) {
     }
 
     private final List<Received> received = new CopyOnWriteArrayList<>();
@@ -30,12 +31,15 @@ public final class UpstreamStub {
             server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
             server.createContext("/", exchange -> {
                 URI uri = exchange.getRequestURI();
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
                 received.add(new Received(
                         exchange.getRequestMethod(),
                         uri.getRawPath() + (uri.getRawQuery() == null ? "" : "?" + uri.getRawQuery()),
                         exchange.getRequestHeaders().getFirst("Authorization"),
-                        exchange.getRequestHeaders().getFirst("X-Correlation-Id")));
-                exchange.getRequestBody().readAllBytes();
+                        exchange.getRequestHeaders().getFirst("X-Correlation-Id"),
+                        exchange.getRequestHeaders().getFirst("X-Internal-Token"),
+                        requestBody,
+                        exchange.getRequestHeaders().getFirst("X-Forwarded-For")));
                 byte[] body = "{\"stub\":true}".getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().add("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, body.length);

@@ -73,3 +73,45 @@ groups:
           severity: warning
         annotations:
           summary: "More than 5 % of the requests and events fail"
+
+  # SEG-2, non-repudiation: the audit log must stay complete and untampered.
+  - name: dancesync-audit
+    rules:
+      - alert: AuditChainBroken
+        # users-service walks the whole chain every AUDIT_VERIFY_INTERVAL (and when the admin asks).
+        expr: audit_chain_valid == 0
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "The audit chain is broken: a record was deleted, inserted or modified"
+          description: "Open the admin console (Overview > Audit chain integrity) to see the first broken record."
+
+      - alert: AuditChainShrunk
+        # The head of an append-only log can only grow: a lower head means its newest records were removed.
+        expr: audit_chain_head_seq < max_over_time(audit_chain_head_seq[1h] offset 10s)
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "The audit log has fewer records than before: its tail was deleted"
+
+      - alert: AuditRecordsDropped
+        # A producer's buffer filled up (users-service unreachable for too long): requests went unrecorded.
+        expr: |
+          (sum(increase(gateway_audit_records_total{result="dropped"}[1m])) or vector(0))
+          + (sum(increase(dancesync_audit_records_total{result="dropped"}[1m])) or vector(0)) > 0
+        for: 0s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Audit records are being dropped: some requests are not in the audit log"
+
+      - alert: AuditDeliveryStalled
+        # Records waiting in the gateway for more than a minute: users-service is not taking them.
+        expr: gateway_audit_buffer_size > 0 and min_over_time(gateway_audit_buffer_size[1m]) > 0
+        for: 30s
+        labels:
+          severity: warning
+        annotations:
+          summary: "Audit records have been waiting for more than a minute ({{ $value }} queued in the gateway)"
