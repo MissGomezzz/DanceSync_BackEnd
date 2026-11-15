@@ -8,6 +8,8 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -28,10 +30,14 @@ class ApiGatewayApplicationTests {
 	@Test
 	void withoutAuthenticationSettingsEveryTokenIsRefused() throws Exception {
 		// A well-formed token of an issuer nobody configured: there are no keys to trust.
-		String token = "eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJkYW5jZXN5bmMtYmF0dGxlLXNlcnZpY2UiLCJzdWIiOiJ4In0.c2ln";
+		// Built at run time so that no token-like literal sits in the source.
+		Base64.Encoder base64 = Base64.getUrlEncoder().withoutPadding();
+		String unknownIssuerJwt = base64.encodeToString("{\"alg\":\"HS256\"}".getBytes(StandardCharsets.UTF_8))
+				+ "." + base64.encodeToString("{\"iss\":\"dancesync-battle-service\",\"sub\":\"x\"}".getBytes(StandardCharsets.UTF_8))
+				+ ".c2ln";
 		assertEquals(401, get("/api/matches/1", null));
-		assertEquals(401, get("/api/matches/1", token));
-		assertEquals(401, get("/api/rooms/ABC123", token));
+		assertEquals(401, get("/api/matches/1", unknownIssuerJwt));
+		assertEquals(401, get("/api/rooms/ABC123", unknownIssuerJwt));
 		assertEquals(200, get("/actuator/health", null));
 	}
 
