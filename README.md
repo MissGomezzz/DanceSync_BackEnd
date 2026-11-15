@@ -387,6 +387,14 @@ It starts [`docker-compose.scale.yml`](docker-compose.scale.yml) plus [`docker-c
 
 **Results**
 
+![DIS-1 scorecard: service restored in 6.2 s at worst, 100 % rooms intact, 0 results lost, 0 counted twice](load-tests/reports/charts/dis1-scorecard.svg)
+
+![Time to restore service per run: the slowest client is back in 3.6-6.2 s, against a 30 s target](load-tests/reports/charts/dis1-recovery.svg)
+
+![Rooms intact per run: 25 % and 0 % before the fixes, 100 % in every run after them](load-tests/reports/charts/dis1-rooms-intact.svg)
+
+The charts are generated from the JSON reports with `node scripts/failover-charts.mjs` (from `load-tests/`); PNG copies for slides are in the same folder.
+
 Local prototype (Windows 11, 8 CPUs, Docker Desktop; 0.5 CPU and 512 MB per replica; nginx; clients with the socket.io-client default reconnection, WebSocket only). Each run: 20 rooms of 7 users (140) battling, the replica with more connections killed with SIGKILL 25 s after the last battle started, with 40-48 word rounds still pending. Reports in [`load-tests/reports/`](load-tests/reports/).
 
 | Run | Clients disconnected / back | Restored: max / p95 / p50 | Rooms intact | Results in PostgreSQL / lost / duplicated |

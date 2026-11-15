@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="400" viewBox="0 0 760 400" role="img" aria-labelledby="t d">
+  <title id="t">DIS-1 recovery time per run</title>
+  <desc id="d">Run 1: median 3.4 s, max 5.9 s; Run 2: median 3.3 s, max 4.0 s; Run 3: median 4.5 s, max 6.2 s; Run 4: median 3.6 s, max 4.4 s; Run 5: median 3.4 s, max 4.2 s; Early kill: median 3.4 s, max 3.6 s</desc>
+  <style>
+    svg { --surface: #fcfcfb; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #6f6e69;
+          --grid: #e4e3df; --axis: #a9a8a2; --series-1: #2a78d6; --series-2: #eb6834;
+          --good: #006300; --good-fill: #e3f1e3; --target: #0b0b0b; }
+    @media (prefers-color-scheme: dark) {
+      svg { --surface: #1a1a19; --text-1: #f0efec; --text-2: #c3c2b7; --text-3: #9d9c94;
+            --grid: #2e2e2c; --axis: #5c5b56; --series-1: #3987e5; --series-2: #d95926;
+            --good: #5fc85f; --good-fill: #1f2e1f; --target: #f0efec; }
+    }
+    text { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; fill: var(--text-2); }
+    .title { font-size: 16px; font-weight: 600; fill: var(--text-1); }
+    .subtitle { font-size: 12px; fill: var(--text-2); }
+    .tick { font-size: 11px; fill: var(--text-3); }
+    .label { font-size: 12px; fill: var(--text-1); }
+    .detail { font-size: 11px; fill: var(--text-3); }
+    .value { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .target-label { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .note { font-size: 11px; fill: var(--text-3); }
+  </style>
+  <rect width="760" height="400" fill="var(--surface)"/>
+  <text class="title" x="24" y="30">Time to restore service after a replica dies</text>
+  <text class="subtitle" x="24" y="52">Seconds from the kill until each disconnected client receives room events again, per run</text>
+  <rect x="24" y="69" width="10" height="10" rx="2" fill="var(--series-1)"/>
+  <text class="label" x="40" y="78">Median client</text>
+  <rect x="145.8" y="69" width="10" height="10" rx="2" fill="var(--series-2)"/>
+  <text class="label" x="161.8" y="78">Slowest client (max)</text>
+  <line x1="56" x2="736" y1="336" y2="336" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="340" text-anchor="end">0 s</text>
+  <line x1="56" x2="736" y1="298.5" y2="298.5" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="302.5" text-anchor="end">5 s</text>
+  <line x1="56" x2="736" y1="261" y2="261" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="265" text-anchor="end">10 s</text>
+  <line x1="56" x2="736" y1="223.5" y2="223.5" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="227.5" text-anchor="end">15 s</text>
+  <line x1="56" x2="736" y1="186" y2="186" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="190" text-anchor="end">20 s</text>
+  <line x1="56" x2="736" y1="148.5" y2="148.5" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="152.5" text-anchor="end">25 s</text>
+  <line x1="56" x2="736" y1="111" y2="111" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="115" text-anchor="end">30 s</text>
+  <line x1="56" x2="736" y1="111" y2="111" stroke="var(--target)" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="target-label" x="736" y="103" text-anchor="end">Target: service restored in &lt; 30 s</text>
+  <path d="M83.66666666666666,336 V314.3725 Q83.66666666666666,310.3725 87.66666666666666,310.3725 H107.66666666666666 Q111.66666666666666,310.3725 111.66666666666666,314.3725 V336 Z" fill="var(--series-1)"><title>Run 1: median 3.4 s</title></path>
+  <path d="M113.66666666666666,336 V295.405 Q113.66666666666666,291.405 117.66666666666666,291.405 H137.66666666666666 Q141.66666666666666,291.405 141.66666666666666,295.405 V336 Z" fill="var(--series-2)"><title>Run 1: max 5.9 s</title></path>
+  <text class="value" x="127.66666666666666" y="285.405" text-anchor="middle">5.9 s</text>
+  <text class="label" x="112.66666666666666" y="356" text-anchor="middle">Run 1</text>
+  <text class="detail" x="112.66666666666666" y="372" text-anchor="middle">140 users, 20 rooms</text>
+  <path d="M196.99999999999997,336 V315.2725 Q196.99999999999997,311.2725 200.99999999999997,311.2725 H220.99999999999997 Q224.99999999999997,311.2725 224.99999999999997,315.2725 V336 Z" fill="var(--series-1)"><title>Run 2: median 3.3 s</title></path>
+  <path d="M226.99999999999997,336 V310.1425 Q226.99999999999997,306.1425 230.99999999999997,306.1425 H250.99999999999997 Q254.99999999999997,306.1425 254.99999999999997,310.1425 V336 Z" fill="var(--series-2)"><title>Run 2: max 4.0 s</title></path>
+  <text class="value" x="240.99999999999997" y="300.1425" text-anchor="middle">4.0 s</text>
+  <text class="label" x="225.99999999999997" y="356" text-anchor="middle">Run 2</text>
+  <text class="detail" x="225.99999999999997" y="372" text-anchor="middle">140 users, 20 rooms</text>
+  <path d="M310.3333333333333,336 V306.34749999999997 Q310.3333333333333,302.34749999999997 314.3333333333333,302.34749999999997 H334.3333333333333 Q338.3333333333333,302.34749999999997 338.3333333333333,306.34749999999997 V336 Z" fill="var(--series-1)"><title>Run 3: median 4.5 s</title></path>
+  <path d="M340.3333333333333,336 V293.74 Q340.3333333333333,289.74 344.3333333333333,289.74 H364.3333333333333 Q368.3333333333333,289.74 368.3333333333333,293.74 V336 Z" fill="var(--series-2)"><title>Run 3: max 6.2 s</title></path>
+  <text class="value" x="354.3333333333333" y="283.74" text-anchor="middle">6.2 s</text>
+  <text class="label" x="339.3333333333333" y="356" text-anchor="middle">Run 3</text>
+  <text class="detail" x="339.3333333333333" y="372" text-anchor="middle">140 users, 20 rooms</text>
+  <path d="M423.6666666666667,336 V313.3675 Q423.6666666666667,309.3675 427.6666666666667,309.3675 H447.6666666666667 Q451.6666666666667,309.3675 451.6666666666667,313.3675 V336 Z" fill="var(--series-1)"><title>Run 4: median 3.6 s</title></path>
+  <path d="M453.6666666666667,336 V307.2925 Q453.6666666666667,303.2925 457.6666666666667,303.2925 H477.6666666666667 Q481.6666666666667,303.2925 481.6666666666667,307.2925 V336 Z" fill="var(--series-2)"><title>Run 4: max 4.4 s</title></path>
+  <text class="value" x="467.6666666666667" y="297.2925" text-anchor="middle">4.4 s</text>
+  <text class="label" x="452.6666666666667" y="356" text-anchor="middle">Run 4</text>
+  <text class="detail" x="452.6666666666667" y="372" text-anchor="middle">140 users, 20 rooms</text>
+  <path d="M537,336 V314.26 Q537,310.26 541,310.26 H561 Q565,310.26 565,314.26 V336 Z" fill="var(--series-1)"><title>Run 5: median 3.4 s</title></path>
+  <path d="M567,336 V308.62 Q567,304.62 571,304.62 H591 Q595,304.62 595,308.62 V336 Z" fill="var(--series-2)"><title>Run 5: max 4.2 s</title></path>
+  <text class="value" x="581" y="298.62" text-anchor="middle">4.2 s</text>
+  <text class="label" x="566" y="356" text-anchor="middle">Run 5</text>
+  <text class="detail" x="566" y="372" text-anchor="middle">140 users, 20 rooms</text>
+  <path d="M650.3333333333333,336 V314.6125 Q650.3333333333333,310.6125 654.3333333333333,310.6125 H674.3333333333333 Q678.3333333333333,310.6125 678.3333333333333,314.6125 V336 Z" fill="var(--series-1)"><title>Early kill: median 3.4 s</title></path>
+  <path d="M680.3333333333333,336 V312.925 Q680.3333333333333,308.925 684.3333333333333,308.925 H704.3333333333333 Q708.3333333333333,308.925 708.3333333333333,312.925 V336 Z" fill="var(--series-2)"><title>Early kill: max 3.6 s</title></path>
+  <text class="value" x="694.3333333333333" y="302.925" text-anchor="middle">3.6 s</text>
+  <text class="label" x="679.3333333333333" y="356" text-anchor="middle">Early kill</text>
+  <text class="detail" x="679.3333333333333" y="372" text-anchor="middle">14 users, 2 rooms</text>
+  <line x1="56" x2="736" y1="336" y2="336" stroke="var(--axis)" stroke-width="1"/>
+</svg>
