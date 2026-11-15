@@ -1,6 +1,7 @@
 import { collectDefaultMetrics, Counter, Gauge, Histogram, Registry } from "prom-client";
 import type {
   AbuseAction,
+  AuditDelivery,
   ErrorSource,
   Metrics,
   RoomConflictResult,
@@ -49,6 +50,7 @@ export class PromMetrics implements Metrics {
   private readonly abuseEvents: Counter<"action">;
   private readonly outboxPending: Gauge;
   private readonly roomConflicts: Counter<"result">;
+  private readonly auditRecordsTotal: Counter<"result">;
 
   constructor(options: PromMetricsOptions = {}) {
     if (options.defaultMetrics ?? true) collectDefaultMetrics({ register: this.registry });
@@ -140,6 +142,13 @@ export class PromMetrics implements Metrics {
       this.sessionsStarted.inc({ kind }, 0);
     }
     for (const outcome of OUTCOMES) this.wordRounds.inc({ outcome }, 0);
+    this.auditRecordsTotal = new Counter({
+      name: "dancesync_audit_records_total",
+      help: "Audit records (SEG-2) delivered to users-service, dropped because the buffer was full, or refused as invalid",
+      labelNames: ["result"],
+      registers,
+    });
+    for (const result of ["shipped", "dropped", "refused"]) this.auditRecordsTotal.inc({ result }, 0);
     for (const action of ABUSE_ACTIONS) this.abuseEvents.inc({ action }, 0);
     for (const source of ERROR_SOURCES) this.errors.inc({ source }, 0);
     for (const result of CONFLICT_RESULTS) this.roomConflicts.inc({ result }, 0);
@@ -188,6 +197,9 @@ export class PromMetrics implements Metrics {
   }
   matchOutboxPending(count: number): void {
     this.outboxPending.set(count);
+  }
+  auditRecords(result: AuditDelivery, count: number): void {
+    this.auditRecordsTotal.inc({ result }, count);
   }
   roomConflict(result: RoomConflictResult): void {
     this.roomConflicts.inc({ result });

@@ -10,6 +10,9 @@ export type AbuseAction = "limited" | "blocked" | "refused";
 /** Where an unexpected error happened; a bounded set, so it can be a metric label. */
 export type ErrorSource = "socket" | "http" | "timer" | "sweep" | "redis" | "process";
 
+/** What became of audit records handed to users-service (SEG-2). */
+export type AuditDelivery = "shipped" | "dropped" | "refused";
+
 /** Outcome of an optimistic room update that lost a race against another writer. */
 export type RoomConflictResult = "retry" | "failure";
 
@@ -43,6 +46,8 @@ export interface Metrics {
   /** Finished matches not delivered to the match history yet (DIS-1 outbox). */
   matchOutboxPending(count: number): void;
   roomConflict(result: RoomConflictResult): void;
+  /** Audit records delivered to users-service, dropped (buffer full) or refused as invalid (SEG-2). */
+  auditRecords(result: AuditDelivery, count: number): void;
 }
 
 /** Records nothing; for harnesses and as the default. */
@@ -62,4 +67,5 @@ export const noopMetrics: Metrics = {
   roomsActive() {},
   matchOutboxPending() {},
   roomConflict() {},
+  auditRecords() {},
 };

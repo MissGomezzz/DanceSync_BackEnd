@@ -13,6 +13,7 @@ import type { GuestTokenIssuer, TokenVerifier } from "../../src/application/auth
 import { CreateRoom } from "../../src/application/usecases/CreateRoom.js";
 import { IssueGuestToken } from "../../src/application/usecases/IssueGuestToken.js";
 import type { AuthAuditLog } from "../../src/infrastructure/auth/authAudit.js";
+import type { AuditTrail } from "../../src/application/ports/AuditTrail.js";
 import { createHandshakeAuth } from "../../src/infrastructure/ws/handshakeAuth.js";
 import { silentAudit, stubTokenVerifier, trustClaimedPlayerId } from "./auth.js";
 import { JoinRoom } from "../../src/application/usecases/JoinRoom.js";
@@ -57,6 +58,10 @@ export interface HarnessOptions {
   songChallenge?: SongChallengeOptions;
   /** Extra or replaced dependencies, built with the harness repository. */
   extend?: (rooms: InMemoryRoomRepository) => Partial<SocketDependencies>;
+  /** SEG-2: where handshakes and events are recorded (the handshake authentication included). */
+  auditTrail?: AuditTrail;
+  /** Proxies whose X-Forwarded-For entry is trusted (the test client plays the ingress). */
+  trustedProxyHops?: number;
 }
 
 /** In-process battle-service (Socket.IO plus the HTTP routes) on a random port, plus client helpers. */
@@ -77,7 +82,12 @@ export class SocketHarness {
     const audit = options.auth?.audit ?? silentAudit;
     this.handle = registerSocketHandlers(this.io, {
       authenticateHandshake: options.auth
-        ? createHandshakeAuth({ verifier: options.auth.verifier, audit })
+        ? createHandshakeAuth({
+            verifier: options.auth.verifier,
+            audit,
+            trail: options.auditTrail,
+            trustedProxyHops: options.trustedProxyHops,
+          })
         : trustClaimedPlayerId,
       authAudit: audit,
       joinRoom: new JoinRoom(this.rooms),
@@ -96,6 +106,8 @@ export class SocketHarness {
       disconnectGraceMs: options.disconnectGraceMs ?? 50,
       pagehideGraceMs: options.pagehideGraceMs,
       reaping: options.reaping,
+      auditTrail: options.auditTrail,
+      trustedProxyHops: options.trustedProxyHops,
       ...options.extend?.(this.rooms),
     });
     const handle = this.handle;

@@ -11,7 +11,8 @@ import java.util.List;
  * Authentication settings of the gateway (SEG-1), bound from {@code dancesync.auth}.
  */
 @ConfigurationProperties("dancesync.auth")
-public record AuthProperties(@DefaultValue Entra entra, @DefaultValue Guest guest, @DefaultValue Cors cors) {
+public record AuthProperties(@DefaultValue Entra entra, @DefaultValue Guest guest, @DefaultValue Cors cors,
+                             @DefaultValue Admin admin) {
 
     /** Smallest accepted HS256 secret: 32 bytes, the size of the hash. */
     static final int MIN_GUEST_SECRET_BYTES = 32;
@@ -87,5 +88,21 @@ public record AuthProperties(@DefaultValue Entra entra, @DefaultValue Guest gues
 
     /** The frontend origin, also allowed on the 401 / 403 answers of the gateway itself. */
     public record Cors(@DefaultValue("http://localhost:5173") String allowedOrigin) {
+    }
+
+    /**
+     * The single admin account (SEG-2): the Entra ID object id ({@code oid}) of the only user who
+     * may open the admin screen (audit log, alerts). One id, not a list: there is exactly one admin.
+     * Empty: nobody is admin.
+     */
+    public record Admin(@DefaultValue("") String userOid) {
+
+        public boolean configured() {
+            return StringUtils.hasText(userOid);
+        }
+
+        public boolean isAdmin(String oid) {
+            return configured() && oid != null && userOid.trim().equalsIgnoreCase(oid.trim());
+        }
     }
 }

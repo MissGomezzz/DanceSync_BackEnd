@@ -1,5 +1,6 @@
 package com.dancesync.gateway.security;
 
+import com.dancesync.gateway.audit.AuditTrailFilter;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
@@ -62,14 +63,17 @@ public class AuthRejectionHandler implements ServerAuthenticationEntryPoint, Ser
 
     @Override
     public Mono<Void> handle(ServerWebExchange exchange, AccessDeniedException denied) {
-        return refuse(exchange, HttpStatus.FORBIDDEN, "FORBIDDEN", "guest_out_of_scope",
-                "This token does not allow this action");
+        // A valid token without the right: a guest outside its room, or anyone but the admin (SEG-2).
+        String reason = exchange.getRequest().getPath().value().startsWith("/api/admin") ? "not_admin" : "guest_out_of_scope";
+        return refuse(exchange, HttpStatus.FORBIDDEN, "FORBIDDEN", reason, "This token does not allow this action");
     }
 
     private Mono<Void> refuse(ServerWebExchange exchange, HttpStatus status, String code, String reason,
                               String message) {
         String correlationId = CorrelationIdFilter.of(exchange);
         (status == HttpStatus.FORBIDDEN ? forbidden : unauthorized).increment();
+        // SEG-2: the non-repudiation record of this request carries the same reason.
+        exchange.getAttributes().put(AuditTrailFilter.REASON_ATTRIBUTE, reason);
         audit.warn("{\"event\":\"auth.rejected\",\"channel\":\"http\",\"code\":\"{}\",\"reason\":\"{}\","
                         + "\"correlationId\":\"{}\",\"method\":\"{}\",\"path\":\"{}\"}",
                 code, reason, correlationId, exchange.getRequest().getMethod().name(),

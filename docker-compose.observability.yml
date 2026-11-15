@@ -21,6 +21,8 @@ x-auth-env: &auth-env
   AZURE_CLIENT_ID: 22222222-2222-4222-8222-222222222222
   ENTRA_JWKS_URI: http://fake-entra:4010/discovery/v2.0/keys
   GUEST_TOKEN_SECRET: una-clave-de-prueba-de-al-menos-32-caracteres
+  # SEG-2: shared secret of the audit batches and of the admin API (local test value).
+  AUDIT_INTERNAL_TOKEN: secreto-interno-de-prueba-de-al-menos-32-bytes
 
 x-battle: &battle
   build: ./battle-service
@@ -33,6 +35,7 @@ x-battle: &battle
     METRICS_PORT: "9464"
     REDIS_URL: redis://redis:6379
     USERS_SERVICE_URL: http://users-service:8081
+    AUDIT_INTERNAL_TOKEN: secreto-interno-de-prueba-de-al-menos-32-bytes
     CORS_ORIGIN: http://localhost:5173
     # client (X-Forwarded-For written by the load scripts) -> api-gateway -> nginx -> replica.
     TRUSTED_PROXY_HOPS: "3"
@@ -84,6 +87,9 @@ services:
       - ./load-tests/lib:/app/lib:ro
       # The key pair is created here on first start; the load scripts sign their tokens with it.
       - ./load-tests/.keys:/app/.keys
+    # Published only for the frontend's dev login (vite dev, VITE_DEV_LOGIN_URL): POST /dev/token.
+    ports:
+      - "${OBS_FAKE_ENTRA_PORT:-14010}:4010"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://localhost:4010/discovery/v2.0/keys').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 3s
@@ -99,6 +105,14 @@ services:
       POSTGRES_USER: dancesync
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dancesync}
       MANAGEMENT_PORT: "9081"
+      # SEG-2: audit log. Local test values; the GeoIP database is optional (scripts/download-geoip.sh).
+      AUDIT_INTERNAL_TOKEN: secreto-interno-de-prueba-de-al-menos-32-bytes
+      AUDIT_CHAIN_KEY: clave-hmac-de-la-cadena-de-prueba-32-bytes
+      AUDIT_VERIFY_INTERVAL: PT30S
+      GEOIP_DB_PATH: /geoip/dbip-lite.mmdb
+      PROMETHEUS_URL: http://prometheus:9090
+    volumes:
+      - ./geoip:/geoip:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,6 +146,8 @@ services:
       REDIS_URL: redis://redis:6379
       # The load scripts play the platform ingress: each room comes from its own X-Forwarded-For address.
       TRUSTED_PROXY_HOPS: "1"
+      # SEG-2: the single admin account (the fake Entra user of load-tests/scripts/seg2-verify.mjs).
+      ADMIN_USER_OID: ${ADMIN_USER_OID:-00000000-0000-4000-8000-00000000ad01}
     depends_on:
       nginx:
         condition: service_started

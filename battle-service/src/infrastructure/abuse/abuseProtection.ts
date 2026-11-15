@@ -1,5 +1,7 @@
 import type { Server, Socket } from "socket.io";
 import type { Logger } from "../../application/ports/Logger.js";
+import { noopAuditTrail, type AuditTrail } from "../../application/ports/AuditTrail.js";
+import { socketActor } from "../audit/socketAudit.js";
 import { rootLogger } from "../logging/logger.js";
 import type { AbuseAuditLog, AbuseIncident } from "./abuseAudit.js";
 import type { AbuseConfig } from "./abuseConfig.js";
@@ -26,6 +28,12 @@ export interface AbuseProtectionDependencies {
   now?: Clock;
   /** Operational errors (not incidents, those go to `audit`). Default: the process logger. */
   logger?: Logger;
+  /**
+   * SEG-2: each incident is also a non-repudiation record. Dropped events are recorded as one
+   * record per incident line (with how many were dropped), not one per event, so a flood cannot
+   * turn the audit log into a second target. Default: none.
+   */
+  trail?: AuditTrail;
 }
 
 interface ConnectionState {
@@ -57,6 +65,7 @@ export function attachAbuseProtection(io: Server<any, any, any, any>, deps: Abus
   const { config, blocks, audit } = deps;
   const logger = deps.logger ?? rootLogger;
   const now = deps.now ?? Date.now;
+  const trail = deps.trail ?? noopAuditTrail;
   const windowMs = config.strikeWindowSeconds * 1000;
   const blockMs = config.blockSeconds * 1000;
   const states = new WeakMap<Socket, ConnectionState>();
@@ -89,6 +98,13 @@ export function attachAbuseProtection(io: Server<any, any, any, any>, deps: Abus
       (remaining) => {
         if (remaining <= 0) return next();
         audit.refused(incident(socket, { socketEvent: "handshake", blockedForMs: remaining }));
+        trail.record({
+          ...socketActor(socket, config.trustedProxyHops),
+          action: "socket:handshake",
+          outcome: "blocked",
+          code: BLOCKED,
+          detail: `blockedForMs=${Math.round(remaining)}`,
+        });
         const refusal: Error & { data?: unknown } = new Error(BLOCKED);
         refusal.data = {
           code: BLOCKED,
@@ -123,6 +139,14 @@ export function attachAbuseProtection(io: Server<any, any, any, any>, deps: Abus
       state.droppedSinceLog += 1;
       if (at - state.lastLoggedAt >= LOG_INTERVAL_MS) {
         audit.limited(incident(socket, { socketEvent: event, dropped: state.droppedSinceLog, retryAfterMs }));
+        trail.record({
+          ...socketActor(socket, config.trustedProxyHops),
+          action: event,
+          resource: socket.data.roomCode,
+          outcome: "rate_limited",
+          code: "RATE_LIMITED",
+          detail: `dropped=${state.droppedSinceLog}`,
+        });
         state.lastLoggedAt = at;
         state.droppedSinceLog = 0;
       }
@@ -141,6 +165,14 @@ export function attachAbuseProtection(io: Server<any, any, any, any>, deps: Abus
       logger.error({ correlationId: socket.data.correlationId, err: error }, "Could not store an abuse block; disconnecting the client anyway");
     }
     audit.blocked(incident(socket, { blockedForMs: blockMs }));
+    trail.record({
+      ...socketActor(socket, config.trustedProxyHops),
+      action: "socket:blocked",
+      resource: socket.data.roomCode,
+      outcome: "blocked",
+      code: BLOCKED,
+      detail: `blockedForMs=${blockMs}`,
+    });
     const notice: RateBlockedPayload = { code: BLOCKED, retryAfterMs: blockMs };
     socket.emit(RATE_BLOCKED_EVENT, notice);
     socket.disconnect(true);

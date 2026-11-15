@@ -20,6 +20,8 @@ import { AuthError, mayActInRoom, type AuthIdentity } from "../../application/au
 import type { LogFields, Logger } from "../../application/ports/Logger.js";
 import { noopMetrics, type Metrics } from "../../application/ports/Metrics.js";
 import type { SessionTracker } from "../../application/ports/SessionTracker.js";
+import { noopAuditTrail, type AuditOutcome, type AuditTrail } from "../../application/ports/AuditTrail.js";
+import { auditDetail, socketActor } from "../audit/socketAudit.js";
 import { DomainError } from "../../domain/errors/DomainError.js";
 import type { Room } from "../../domain/model/Room.js";
 import { RoomService } from "../../domain/services/RoomService.js";
@@ -28,7 +30,7 @@ import { rootLogger } from "../logging/logger.js";
 import { RoomTimers } from "../scheduling/RoomTimers.js";
 import type { WordRaceScheduler } from "../scheduling/WordRaceScheduler.js";
 import { toRoomDto, toRoomDtoOrNull } from "../serialization/roomDto.js";
-import type { HandshakeAuthenticator } from "./handshakeAuth.js";
+import { HANDSHAKE_ACTION, type HandshakeAuthenticator } from "./handshakeAuth.js";
 import { roundEndedPayload, roundStartedPayload } from "./wordRaceMessages.js";
 import {
   ClientEvents,
@@ -94,6 +96,14 @@ export interface SocketDependencies {
   metrics?: Metrics;
   /** Tells which signed-in handshakes start a session (OBS-1). Absent: user sessions are not counted. */
   sessions?: SessionTracker;
+  /**
+   * SEG-2, non-repudiation: one record per accepted handshake and per client event, with the
+   * identity of the token, the client's address and browser, the outcome and the correlation id.
+   * Default: none.
+   */
+  auditTrail?: AuditTrail;
+  /** Proxies whose X-Forwarded-For entry is trusted, to record the client's address. Default 0. */
+  trustedProxyHops?: number;
 }
 
 export interface WordRaceSocketDependencies {
@@ -155,6 +165,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   const audit = deps.authAudit ?? consoleAuthAudit;
   const logger = deps.logger ?? rootLogger;
   const metrics = deps.metrics ?? noopMetrics;
+  const trail = deps.auditTrail ?? noopAuditTrail;
+  const trustedProxyHops = deps.trustedProxyHops ?? 0;
   // No connection is accepted without a valid token: this runs before "connection".
   io.use(deps.authenticateHandshake);
   const graceTimers = new Map<string, NodeJS.Timeout>();
@@ -560,6 +572,8 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       userKind: socket.data.auth?.kind,
     });
     log.info({ playerId: socket.data.auth?.playerId }, "Socket connected");
+    // SEG-2: every middleware (authentication, SEG-3 block list) let this handshake through.
+    trail.record({ ...socketActor(socket, trustedProxyHops), action: HANDSHAKE_ACTION, outcome: "ok" });
     const kind = socket.data.auth?.kind;
     if (kind) metrics.socketConnected(kind);
     // A guest session starts with its token (POST guest-token); a signed-in one at
@@ -573,9 +587,12 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         (error: unknown) => log.warn({ err: error }, "Could not record the session"),
       );
     }
-    /** Runs a client event through guard, logging and measuring it with this connection's correlation id. */
-    const handle = <T>(event: string, ack: Ack<T> | undefined, handler: () => Promise<T>): Promise<void> =>
-      guard(socket, ack, handler, { event, log, metrics });
+    /**
+     * Runs a client event through guard, logging and measuring it with this connection's correlation
+     * id, and recording it in the audit trail (SEG-2). The payload is read for the audit detail only.
+     */
+    const handle = <T>(event: string, ack: Ack<T> | undefined, handler: () => Promise<T>, payload?: unknown): Promise<void> =>
+      guard(socket, ack, handler, { event, log, metrics, trail, trustedProxyHops, payload });
 
     // room:join binds the socket to a seat: every other event must act in the room
     // recorded here, see requireOwnSeat. The player is the one identified by the
@@ -623,7 +640,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
           socket.emit(ServerEvents.VOTE_MINE, { roomCode: room.code, dancerId: RoomService.voteOf(room, playerId) });
         }
         return toRoomDto(room, new Date());
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.ROLE_SELECT, (payload, ack) =>
@@ -632,7 +649,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const room = await deps.selectRole.execute({ ...payload, roomCode, playerId });
         publishRoom(room);
         return toRoomDto(room, new Date());
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.PLAYER_READY, (payload, ack) =>
@@ -641,7 +658,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const room = await deps.setReady.execute({ ...payload, roomCode, playerId });
         publishRoom(room);
         return toRoomDto(room, new Date());
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.ROOM_LEAVE, (payload, ack) =>
@@ -649,7 +666,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const { roomCode, playerId } = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         const left = await leaveRoom(roomCode, playerId);
         return toRoomDtoOrNull(left.room, new Date());
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.PLAYER_KICK, (payload, ack) =>
@@ -665,7 +682,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         );
         publishRoom(room);
         return toRoomDto(room, new Date());
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.BATTLE_START, (payload, ack) =>
@@ -679,7 +696,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         });
         announceBattleStarted(room);
         return toRoomDto(room, new Date());
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.WORD_SUBMIT, (payload, ack) =>
@@ -704,7 +721,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
           if (bonus) publishRoom(bonus);
         }
         return { outcome: result.outcome, winnerId: result.round.winnerId };
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.SONG_CHALLENGE_START, (payload, ack) =>
@@ -713,7 +730,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const room = await deps.startSongChallenge.execute({ ...payload, roomCode, requesterId });
         publishRoom(room);
         return toRoomDto(room, new Date());
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.SONG_CHALLENGE_SUBMIT, (payload, ack) =>
@@ -722,7 +739,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const result = await deps.submitSongPhrase.execute({ ...payload, roomCode, playerId });
         publishRoom(result.room);
         return { room: toRoomDto(result.room, new Date()), outcome: result.outcome };
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.SONG_CHOOSE, (payload, ack) =>
@@ -737,7 +754,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         if (battleStarted) announceBattleStarted(room);
         else publishRoom(room);
         return toRoomDto(room, new Date());
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.CHAT_MESSAGE, (payload, ack) =>
@@ -746,7 +763,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const message = await deps.sendChatMessage.execute({ ...payload, roomCode, senderId });
         io.to(message.roomCode).emit(ServerEvents.CHAT_MESSAGE, message);
         return message;
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.VOTE_CAST, (payload, ack) =>
@@ -763,7 +780,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         if (changed && dancerId !== null) metrics.voteCast();
         emitVoteMine(room.code, voterId, dancerId);
         return { dancerId };
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.ROOM_REMATCH, (payload, ack) =>
@@ -775,7 +792,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         publishRoom(room);
         for (const voterId of clearedVoterIds) emitVoteMine(room.code, voterId, null);
         return toRoomDto(room, new Date());
-      }),
+      }, payload),
     );
 
     // WebRTC signaling is a thin relay: it checks room membership and forwards
@@ -785,7 +802,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         const { roomCode, playerId } = requireOwnSeat(socket, payload?.roomCode, payload?.playerId);
         socket.to(roomCode).emit(ServerEvents.WEBRTC_PEER_READY, { playerId });
         return null;
-      }),
+      }, payload),
     );
 
     socket.on(ClientEvents.WEBRTC_SIGNAL, (payload, ack) =>
@@ -798,7 +815,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         }
         io.to(playerChannel(signal.to)).emit(ServerEvents.WEBRTC_SIGNAL, signal);
         return null;
-      }),
+      }, payload),
     );
 
     // A socket unbound from another replica (kick, leave) still carries its old
@@ -987,13 +1004,17 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-/** What guard needs to observe an event (OBS-1). */
+/** What guard needs to observe an event (OBS-1) and record it (SEG-2). */
 interface GuardContext {
   /** The client event being handled; a bounded set of names. */
   event: string;
   /** The connection's logger (correlationId, socketId, userKind). */
   log: Logger;
   metrics: Metrics;
+  trail: AuditTrail;
+  trustedProxyHops: number;
+  /** The event's payload, only for the few facts auditDetail keeps. */
+  payload?: unknown;
 }
 
 /** Events too chatty for the info level: WebRTC signaling relays every ICE candidate. */
@@ -1016,11 +1037,25 @@ async function guard<T>(
   socket: BattleSocket,
   ack: Ack<T> | undefined,
   handler: () => Promise<T>,
-  { event, log, metrics }: GuardContext,
+  { event, log, metrics, trail, trustedProxyHops, payload: eventPayload }: GuardContext,
 ): Promise<void> {
   const reply: Ack<T> | undefined = typeof ack === "function" ? ack : undefined;
   const startedAt = performance.now();
   const roomBefore = socket.data.roomCode;
+  const audit = (outcome: AuditOutcome, code?: string): void => {
+    try {
+      trail.record({
+        ...socketActor(socket, trustedProxyHops),
+        action: event,
+        resource: socket.data.roomCode ?? roomBefore ?? roomOf(eventPayload),
+        outcome,
+        code,
+        detail: auditDetail(event, eventPayload),
+      });
+    } catch (error) {
+      log.error({ event, err: error }, "Could not record the audit entry");
+    }
+  };
   const done = (fields: LogFields): void => {
     const durationMs = performance.now() - startedAt;
     metrics.socketEventHandled(event, durationMs / 1000);
@@ -1037,6 +1072,7 @@ async function guard<T>(
     const data = await handler();
     reply?.({ ok: true, data });
     done({ ok: true });
+    audit("ok");
   } catch (error) {
     try {
       const expected = error instanceof DomainError || error instanceof AuthError;
@@ -1050,10 +1086,17 @@ async function guard<T>(
       if (reply) reply({ ok: false, error: payload });
       else socket.emit(ServerEvents.ERROR, payload);
       done({ ok: false, code: payload.code });
+      audit(error instanceof AuthError ? "rejected" : expected ? "failed" : "error", payload.code);
     } catch (replyError) {
       log.error({ event, err: replyError }, "Error reporting a socket error");
     }
   }
+}
+
+/** The room named in a payload, for an event refused before the socket joined one. */
+function roomOf(payload: unknown): string | undefined {
+  const code = (payload as { roomCode?: unknown } | null | undefined)?.roomCode;
+  return typeof code === "string" ? code.slice(0, 16).toUpperCase() : undefined;
 }
 
 /** The fields that tie a log line to a battle: room, battle and its correlation id (OBS-1). */
