@@ -3,7 +3,8 @@ FROM node:22-slim AS build
 WORKDIR /app
 RUN npm install -g pnpm@10.11.0
 COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile
+# --ignore-scripts: no dependency lifecycle script runs while the image is built.
+RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY tsconfig.json ./
 COPY src ./src
 RUN pnpm build && pnpm prune --prod

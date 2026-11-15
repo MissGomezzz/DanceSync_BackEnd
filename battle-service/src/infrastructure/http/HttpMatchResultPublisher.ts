@@ -21,7 +21,10 @@ export class HttpMatchResultPublisher implements MatchResultPublisher {
     private readonly timeoutMs: number = DEFAULT_TIMEOUT_MS,
     private readonly fetchImpl: typeof fetch = fetch,
   ) {
-    this.baseUrl = usersServiceUrl.replace(/\/+$/, "");
+    // Trailing slashes are cut with a loop: a regular expression here backtracks badly on long input.
+    let end = usersServiceUrl.length;
+    while (end > 0 && usersServiceUrl[end - 1] === "/") end--;
+    this.baseUrl = usersServiceUrl.slice(0, end);
   }
 
   async publish(match: MatchRecord): Promise<void> {
