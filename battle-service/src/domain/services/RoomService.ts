@@ -303,6 +303,7 @@ export const RoomService = {
       song: room.selectedSong,
       votes: {},
       wordsWon: Object.fromEntries(dancers.map((d) => [d.id, 0])),
+      wordRoundsAwarded: [],
       scoring: { votePoints: scoring.votePoints, wordBonusPoints: scoring.wordBonusPoints },
       startedAt: new Date(startedAt),
       // The battle lasts exactly the song clip; votes count until then.
@@ -325,19 +326,47 @@ export const RoomService = {
    * Counts a word round won by `playerId`. Only a dancer of the battle in
    * progress earns it; a win for a dancer who already left, or after the battle
    * finished, is refused so it can never change a closed result.
+   *
+   * With `roundId` the bonus is idempotent (DIS-1): a round already counted
+   * returns the very same room, so nothing is stored twice whichever replica
+   * pays it first.
    */
-  awardWordBonus(room: Room, playerId: string): Room {
+  awardWordBonus(room: Room, playerId: string, roundId?: string): Room {
     if (room.status !== "battling" || !room.battle) {
       throw new DomainError("ROOM_NOT_BATTLING", `Room ${room.code} has no battle in progress`);
     }
     if (!room.battle.dancerIds.includes(playerId)) {
       throw new DomainError("INVALID_DANCER", `Player ${playerId} is not dancing in this battle`);
     }
+    const awarded = room.battle.wordRoundsAwarded;
+    if (roundId !== undefined && awarded?.includes(roundId)) return room;
     const current = room.battle.wordsWon[playerId] ?? 0;
     return {
       ...room,
-      battle: { ...room.battle, wordsWon: { ...room.battle.wordsWon, [playerId]: current + 1 } },
+      battle: {
+        ...room.battle,
+        wordsWon: { ...room.battle.wordsWon, [playerId]: current + 1 },
+        ...(roundId !== undefined && awarded ? { wordRoundsAwarded: [...awarded, roundId] } : {}),
+      },
     };
+  },
+
+  /**
+   * Pays every won round of `battleId` whose bonus is still missing (DIS-1):
+   * the replica that won the claim may have died before paying it. Skips what
+   * cannot be paid any more (the battle is another one or over, the winner left)
+   * and battles that do not track paid rounds. Returns the same room when there
+   * is nothing to pay.
+   */
+  reconcileWordBonuses(room: Room, battleId: string, wonRounds: ReadonlyArray<{ roundId: string; winnerId: string }>): Room {
+    const battle = room.battle;
+    if (room.status !== "battling" || !battle || battle.id !== battleId || !battle.wordRoundsAwarded) return room;
+    let next = room;
+    for (const { roundId, winnerId } of wonRounds) {
+      if (!battle.dancerIds.includes(winnerId)) continue;
+      next = RoomService.awardWordBonus(next, winnerId, roundId);
+    }
+    return next;
   },
 
   /**

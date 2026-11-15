@@ -9,6 +9,8 @@ import type { ClaimRoundResult, WordRaceRepository } from "../../domain/ports/Wo
  * completion before any other callback, which makes it the in-memory equivalent
  * of a Lua script in Redis or a conditional UPDATE in SQL. Races are stored and
  * returned as copies so callers can never mutate the stored state by accident.
+ * Without an explicit `now` the process clock decides: there is only one
+ * process, so it is the single clock every caller shares (like Redis TIME).
  */
 export class InMemoryWordRaceRepository implements WordRaceRepository {
   private readonly races = new Map<string, WordRace>();
@@ -36,7 +38,7 @@ export class InMemoryWordRaceRepository implements WordRaceRepository {
     return structuredClone(opened);
   }
 
-  async claimRound(roomCode: string, roundId: string, playerId: string, now: Date): Promise<ClaimRoundResult> {
+  async claimRound(roomCode: string, roundId: string, playerId: string, now: Date = new Date()): Promise<ClaimRoundResult> {
     // --- critical section (synchronous) ---
     const race = this.races.get(key(roomCode));
     const round = race?.rounds.find((r) => r.id === roundId);
@@ -51,7 +53,7 @@ export class InMemoryWordRaceRepository implements WordRaceRepository {
     return { claimed: true, round: structuredClone(won) };
   }
 
-  async expireRound(roomCode: string, roundId: string, now: Date): Promise<WordRound | null> {
+  async expireRound(roomCode: string, roundId: string, now: Date = new Date()): Promise<WordRound | null> {
     // --- critical section (synchronous) ---
     const race = this.races.get(key(roomCode));
     const round = race?.rounds.find((r) => r.id === roundId);

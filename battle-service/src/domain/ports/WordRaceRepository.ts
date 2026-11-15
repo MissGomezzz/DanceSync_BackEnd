@@ -12,6 +12,11 @@ export type ClaimRoundResult =
  * atomic step inside the store. Use cases must never decide a transition from a
  * value they read earlier, because with an async store (or several service
  * instances) that value can be stale by the time they write it back.
+ *
+ * Time (DIS-1): claim and expiry compare `now` with the round's closesAt. When
+ * `now` is omitted the store decides with its own clock (Redis: the server's
+ * TIME, the same for every replica), so two replicas whose clocks drift apart
+ * can never disagree on whether a round is still claimable. Tests pass `now`.
  */
 export interface WordRaceRepository {
   /** Stores (or replaces) the whole race. Only used to create it. */
@@ -40,7 +45,7 @@ export interface WordRaceRepository {
    * AND status = 'open' AND winner_id IS NULL AND closes_at > now()`;
    * rowCount === 1 means you won.
    */
-  claimRound(roomCode: string, roundId: string, playerId: string, now: Date): Promise<ClaimRoundResult>;
+  claimRound(roomCode: string, roundId: string, playerId: string, now?: Date): Promise<ClaimRoundResult>;
 
   /**
    * open -> expired, only if nobody won and `now` is at or past closesAt (the
@@ -51,5 +56,5 @@ export interface WordRaceRepository {
    * SQL: `UPDATE word_rounds SET status = 'expired' WHERE id = $1 AND status = 'open'
    * AND winner_id IS NULL AND closes_at <= now()`.
    */
-  expireRound(roomCode: string, roundId: string, now: Date): Promise<WordRound | null>;
+  expireRound(roomCode: string, roundId: string, now?: Date): Promise<WordRound | null>;
 }

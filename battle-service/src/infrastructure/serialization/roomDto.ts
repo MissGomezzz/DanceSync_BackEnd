@@ -21,7 +21,7 @@ export interface SongSelectionDto extends Omit<SongSelection, "challenge"> {
  * The battle without `votes`: who voted for whom never leaves the server (each
  * spectator learns their own vote through vote:mine). Only totals are sent.
  */
-export interface BattleDto extends Omit<Battle, "votes"> {
+export interface BattleDto extends Omit<Battle, "votes" | "wordRoundsAwarded"> {
   /** Time until the dancing begins; negative once it began (elapsed time). */
   startsInMs: number;
   /** Time until the battle finishes on its own (battle.endsAt) while it runs; null once finished. */
@@ -66,7 +66,8 @@ export function toRoomDto(room: Room, now: Date): RoomDto {
 }
 
 function toBattleDto(battle: Battle, running: boolean, at: number): BattleDto {
-  const { votes: _private, ...visible } = battle;
+  // wordRoundsAwarded is server bookkeeping (DIS-1), not something clients use.
+  const { votes: _private, wordRoundsAwarded: _bookkeeping, ...visible } = battle;
   // A finished battle shows its frozen result; a running one is scored live.
   const standings = battle.result ? battle.result.standings : ScoringService.standings(battle);
   return {

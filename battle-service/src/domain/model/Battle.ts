@@ -66,6 +66,14 @@ export interface Battle {
   votes: Record<string, string>;
   /** Word race rounds won per dancer (counts, not points). */
   wordsWon: Record<string, number>;
+  /**
+   * Ids of the word race rounds already counted in wordsWon (DIS-1). Makes the
+   * bonus idempotent per round: the claim of a round and its bonus are two
+   * writes, so a replica that dies between them leaves the bonus to be paid by
+   * another replica, which must never pay it twice. Absent on battles started
+   * before it existed; those are never reconciled.
+   */
+  wordRoundsAwarded?: string[];
   /** Points per vote and per word won, fixed for the whole battle. */
   scoring: ScoringPoints;
   /** When the dancing begins (the start command plus the countdown). */

@@ -30,6 +30,7 @@ import { StartWordRace } from "./application/usecases/StartWordRace.js";
 import { OpenWordRound } from "./application/usecases/OpenWordRound.js";
 import { ExpireWordRound } from "./application/usecases/ExpireWordRound.js";
 import { StopWordRace } from "./application/usecases/StopWordRace.js";
+import { ResumeWordRace } from "./application/usecases/ResumeWordRace.js";
 import { SubmitWord } from "./application/usecases/SubmitWord.js";
 import { GetActiveWordRound } from "./application/usecases/GetActiveWordRound.js";
 import { createStateStores } from "./infrastructure/redis/stateStores.js";
@@ -106,6 +107,7 @@ const wordRaceScheduler = new WordRaceScheduler({
   openWordRound: new OpenWordRound(rooms, wordRaces),
   expireWordRound: new ExpireWordRound(wordRaces),
   stopWordRace: new StopWordRace(wordRaces),
+  resumeWordRace: new ResumeWordRace(rooms, wordRaces),
   broadcaster: createSocketWordRaceBroadcaster(io),
 });
 const socketHandlers = registerSocketHandlers(io, {
@@ -164,6 +166,8 @@ httpServer.listen(env.port, () => {
 function shutdown(signal: string): void {
   console.log(`${signal} received, shutting down battle-service`);
   socketHandlers.close();
+  // Only this replica's timers: the races stay in the store for the other replicas.
+  wordRaceScheduler.close();
   io.close();
   httpServer.close(() => {
     void stateStores.close().finally(() => process.exit(0));

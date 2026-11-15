@@ -15,14 +15,15 @@ export type ExpireWordRoundOutput =
   | { expired: false; round: WordRound | null };
 
 export class ExpireWordRound {
+  /** @param clock Injected by tests; omitted, the store's own clock decides (DIS-1, see WordRaceRepository). */
   constructor(
     private readonly races: WordRaceRepository,
-    private readonly clock: () => Date = () => new Date(),
+    private readonly clock?: () => Date,
   ) {}
 
   async execute(input: ExpireWordRoundInput): Promise<ExpireWordRoundOutput> {
     // The repository decides atomically; this use case never expires from its own read.
-    const expired = await this.races.expireRound(input.roomCode, input.roundId, this.clock());
+    const expired = await this.races.expireRound(input.roomCode, input.roundId, this.clock?.());
     const race = await this.races.find(input.roomCode);
     if (expired && race) return { expired: true, round: expired, race };
     return { expired: false, round: race?.rounds.find((r) => r.id === input.roundId) ?? null };

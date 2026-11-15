@@ -24,6 +24,7 @@ import { StartBattle } from "../src/application/usecases/StartBattle.js";
 import { StartRematch } from "../src/application/usecases/StartRematch.js";
 import { StartSongChallenge } from "../src/application/usecases/StartSongChallenge.js";
 import { StartWordRace } from "../src/application/usecases/StartWordRace.js";
+import { ResumeWordRace } from "../src/application/usecases/ResumeWordRace.js";
 import { StopWordRace } from "../src/application/usecases/StopWordRace.js";
 import { SubmitSongPhrase } from "../src/application/usecases/SubmitSongPhrase.js";
 import { SubmitWord } from "../src/application/usecases/SubmitWord.js";
@@ -58,7 +59,10 @@ interface Replica {
   io: BattleServer;
   http: HttpServer;
   handlers: SocketHandlersHandle;
+  scheduler: WordRaceScheduler;
   stores: StateStores;
+  /** Killed by the test (see kill); `after` must not close it again. */
+  dead: boolean;
 }
 
 interface Recorded {
@@ -88,6 +92,7 @@ async function startReplica(name: string): Promise<Replica> {
     openWordRound: new OpenWordRound(rooms, races),
     expireWordRound: new ExpireWordRound(races),
     stopWordRace: new StopWordRace(races),
+    resumeWordRace: new ResumeWordRace(rooms, races),
     broadcaster: createSocketWordRaceBroadcaster(io),
   });
   const handlers = registerSocketHandlers(io, {
@@ -115,7 +120,7 @@ async function startReplica(name: string): Promise<Replica> {
   });
   await new Promise<void>((resolve) => http.listen(0, resolve));
   const url = `http://localhost:${(http.address() as AddressInfo).port}`;
-  const replica = { name, url, io, http, handlers, stores };
+  const replica: Replica = { name, url, io, http, handlers, scheduler, stores, dead: false };
   replicas.push(replica);
   return replica;
 }
@@ -128,6 +133,40 @@ async function ok<T>(socket: ClientSocket, event: string, payload: unknown): Pro
   const response = await emit<T>(socket, event, payload);
   if (!response.ok) assert.fail(`${event} failed: ${response.error.code} ${response.error.message}`);
   return response.data;
+}
+
+/**
+ * DIS-1: the replica stops abruptly. Its clients lose their connection, every
+ * timer it owned (word race, deadlines, grace periods) is gone, and its Redis
+ * connections close, so it no longer answers adapter requests. Nothing it
+ * stored is cleaned up: the race and the room stay in Redis, as after a crash.
+ */
+async function kill(replica: Replica): Promise<void> {
+  replica.dead = true;
+  await replica.io.close();
+  // The disconnects above armed grace timers on this replica; a dead process has none.
+  replica.handlers.close();
+  replica.scheduler.close();
+  await replica.stores.close();
+}
+
+/** Brings a room with two dancers and two spectators to a running battle, started by `host`. */
+async function battleOn(owner: Replica, seats: Array<[Replica, string, "dancer" | "spectator"]>): Promise<{ code: string; players: Recorded[] }> {
+  const [, hostId] = seats[0];
+  const created = await new CreateRoom(owner.stores.rooms).execute({ hostId, displayName: hostId });
+  codes.push(created.code);
+  const players: Recorded[] = [];
+  for (const [replica, playerId] of seats) players.push(await client(replica, playerId));
+  for (const p of players) await ok(p.socket, "room:join", { roomCode: created.code, playerId: p.playerId, displayName: p.playerId });
+  for (const [i, [, playerId, role]] of seats.entries()) await ok(players[i].socket, "role:select", { roomCode: created.code, playerId, role });
+  await readyUp(created.code, Object.fromEntries(players.map((p) => [p.playerId, p.socket])));
+  await pickSong(owner.stores.rooms, created.code);
+  await ok(players[0].socket, "battle:start", { roomCode: created.code, requesterId: hostId });
+  return { code: created.code, players };
+}
+
+function endsOf(rec: Recorded, roundId: string): number {
+  return rec.ended.filter((e) => e.roundId === roundId).length;
 }
 
 async function waitUntil(condition: () => boolean, label: string, timeoutMs = 4000): Promise<void> {
@@ -163,7 +202,9 @@ describe("Two battle-service instances sharing one Redis", { skip: !TEST_REDIS_U
   after(async () => {
     for (const socket of clients) socket.disconnect();
     for (const replica of replicas) {
+      if (replica.dead) continue;
       replica.handlers.close();
+      replica.scheduler.close();
       await replica.io.close();
       await replica.stores.close();
     }
@@ -251,6 +292,66 @@ describe("Two battle-service instances sharing one Redis", { skip: !TEST_REDIS_U
     const finalRoom = (await one.stores.rooms.findByCode(code))!;
     const wins = Object.values(finalRoom.battle?.wordsWon ?? {}).reduce((a, b) => a + b, 0);
     assert.equal(wins, 2, "two rounds were won, one expired: two scored wins");
+  });
+
+  it("DIS-1: the word race goes on when the replica running its timers dies, each round announced once", async () => {
+    const owner = await startReplica("owner");
+    const survivor = await startReplica("survivor");
+    const { code, players } = await battleOn(owner, [
+      [owner, "k-host", "dancer"],
+      [survivor, "k-guest", "dancer"],
+      [owner, "k-fanA", "spectator"],
+      [survivor, "k-fanB", "spectator"],
+    ]);
+    const [host, guest, fanA, fanB] = players;
+    await waitUntil(() => players.every((p) => p.started.length >= 1), "round 1 on every client");
+    const round1 = guest.started[0];
+
+    await kill(owner);
+    // The owner's clients reconnect through the load balancer to the survivor and repeat room:join.
+    const host2 = await client(survivor, "k-host");
+    const fanA2 = await client(survivor, "k-fanA");
+    for (const p of [host2, fanA2]) await ok(p.socket, "room:join", { roomCode: code, playerId: p.playerId, displayName: p.playerId });
+    assert.ok(host.socket.disconnected && fanA.socket.disconnected);
+
+    // Round 2 opens on the survivor; the guest wins it there.
+    await waitUntil(() => guest.started.length >= 2, "round 2 opened by the survivor");
+    const round2 = guest.started[1];
+    const win = await ok<SubmitAck>(guest.socket, "word:submit", { roomCode: code, playerId: "k-guest", roundId: round2.roundId, text: round2.word });
+    assert.equal(win.outcome, "won");
+    await waitUntil(() => guest.started.length >= 3 && endsOf(guest, guest.started[2].roundId) === 1, "round 3 expired", 6000);
+    await sleep(WINDOW_MS); // a duplicate announcement would show up by now
+
+    const roundIds = guest.started.map((r) => r.roundId);
+    assert.equal(roundIds[0], round1.roundId);
+    assert.equal(new Set(roundIds).size, 3, "three distinct rounds");
+    for (const p of [guest, fanB]) {
+      for (const roundId of roundIds) {
+        assert.equal(p.started.filter((r) => r.roundId === roundId).length, 1, `${p.playerId} saw ${roundId} open once`);
+        assert.equal(endsOf(p, roundId), 1, `${p.playerId} saw ${roundId} end once`);
+      }
+    }
+    for (const p of [host2, fanA2]) {
+      for (const roundId of roundIds.slice(1)) assert.equal(endsOf(p, roundId), 1, `${p.playerId} saw ${roundId} end once after rejoining`);
+    }
+    const stored = (await survivor.stores.rooms.findByCode(code))!;
+    assert.deepEqual(stored.battle?.wordsWon, { "k-host": 0, "k-guest": 1 }, "the win scored once, nothing lost");
+    assert.deepEqual(stored.battle?.wordRoundsAwarded, [round2.roundId]);
+  });
+
+  it("DIS-1: with nobody rejoining, the survivor's periodic sweep resumes the word race", async () => {
+    const owner = await startReplica("owner-2");
+    const survivor = await startReplica("survivor-2");
+    const { players } = await battleOn(owner, [
+      [owner, "w-host", "dancer"],
+      [survivor, "w-guest", "dancer"],
+    ]);
+    const guest = players[1];
+    await waitUntil(() => guest.started.length >= 1, "round 1 on the survivor's client");
+    await kill(owner);
+    await survivor.handlers.sweep();
+    await waitUntil(() => guest.started.length >= 3 && endsOf(guest, guest.started[2].roundId) === 1, "every round ended", 6000);
+    for (const round of guest.started) assert.equal(endsOf(guest, round.roundId), 1, `round ${round.roundNumber} ended once`);
   });
 
   it("lets instance 2 join a room that instance 1 created", async () => {

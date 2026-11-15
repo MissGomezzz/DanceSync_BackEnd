@@ -284,5 +284,19 @@ for (const make of implementations) {
       ]);
       assert.ok(Boolean(expired) !== claim.claimed, "exactly one of expire and claim takes effect");
     });
+
+    it("decides claims and expiries with the store's own clock when no instant is given (DIS-1)", async () => {
+      const code = newCode();
+      // Round 1: opened 2 s ago, closes in 3 s. Round 2: closed 1 s ago.
+      const race = newRace(code, new Date(Date.now() - 12_000));
+      race.rounds[1] = { ...race.rounds[1], opensAt: new Date(Date.now() - 6_000), closesAt: new Date(Date.now() - 1_000) };
+      await races.save(race);
+      await races.openRound(code, "round-1");
+      await races.openRound(code, "round-2");
+      assert.equal(await races.expireRound(code, "round-1"), null, "round 1 is still inside its window");
+      assert.equal((await races.claimRound(code, "round-1", "host")).claimed, true);
+      assert.equal((await races.claimRound(code, "round-2", "host")).claimed, false, "round 2 is past closesAt");
+      assert.equal((await races.expireRound(code, "round-2"))?.status, "expired");
+    });
   });
 }

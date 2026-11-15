@@ -263,6 +263,31 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     await deps.wordRace?.scheduler.stop(room.code);
   }
 
+  /**
+   * DIS-1: arms on this replica the timers of the room's pending word rounds
+   * (from their absolute times in the store) and pays any bonus of a won round
+   * that the claiming replica could not pay before dying. Safe to run on every
+   * replica and as often as wanted: timers are armed once per replica, round
+   * transitions are atomic and only the replica whose transition applied
+   * broadcasts it, and bonuses are paid once per round. Never throws: the word
+   * race must not break a join or the sweep.
+   */
+  async function resumeWordRace(roomCode: string): Promise<void> {
+    const wordRace = deps.wordRace;
+    if (!wordRace) return;
+    try {
+      const race = await wordRace.scheduler.resume(roomCode);
+      if (!race) return;
+      const { room, paidRoundIds } = await wordRace.awardWordBonus.reconcile(race);
+      if (room && paidRoundIds.length > 0) {
+        console.warn(`Word bonus of rounds ${paidRoundIds.join(", ")} in room ${room.code} paid on resume`);
+        publishRoom(room);
+      }
+    } catch (error) {
+      if (!(error instanceof DomainError)) console.error(`Error resuming the word race of room ${roomCode}`, error);
+    }
+  }
+
   /** Tells a spectator (every tab, through their player channel) what their current vote is. */
   function emitVoteMine(roomCode: string, voterId: string, dancerId: string | null): void {
     io.to(playerChannel(voterId)).emit(ServerEvents.VOTE_MINE, { roomCode, dancerId });
@@ -400,6 +425,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         continue;
       }
       armRoomTimers(room);
+      if (room.status === "battling") await resumeWordRace(room.code);
       const bound = new Set((await io.in(room.code).fetchSockets()).map((s) => s.data.playerId));
       for (const player of room.players) {
         const key = seatKey(room.code, player.id);
@@ -470,7 +496,12 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         await socket.join(room.code);
         await socket.join(playerChannel(playerId));
         publishRoom(room);
-        if (room.status === "battling") await resyncWordRound(socket, deps, room.code);
+        if (room.status === "battling") {
+          // DIS-1: this replica takes the word race over if the one running its
+          // timers died (the player may be rejoining precisely because of that).
+          await resumeWordRace(room.code);
+          await resyncWordRound(socket, deps, room.code);
+        }
         // A spectator back after a refresh gets their vote again (privately).
         if (room.battle && room.spectators.some((s) => s.id === playerId)) {
           socket.emit(ServerEvents.VOTE_MINE, { roomCode: room.code, dancerId: RoomService.voteOf(room, playerId) });
@@ -538,7 +569,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         // Only the submission whose atomic claim succeeded announces the winner, so
         // the room receives exactly one word:round-ended per round.
         if (result.outcome === "won") {
-          const bonus = await awardWordBonus(deps.wordRace, roomCode, playerId);
+          const bonus = await awardWordBonus(deps.wordRace, roomCode, playerId, result.round.id);
           io.to(roomCode).emit(
             ServerEvents.WORD_ROUND_ENDED,
             roundEndedPayload(result.race, result.round, bonus?.battle?.scoring.wordBonusPoints ?? 0),
@@ -688,9 +719,10 @@ async function awardWordBonus(
   wordRace: WordRaceSocketDependencies,
   roomCode: string,
   playerId: string,
+  roundId: string,
 ): Promise<Room | null> {
   try {
-    return await wordRace.awardWordBonus.execute({ roomCode, playerId });
+    return await wordRace.awardWordBonus.execute({ roomCode, playerId, roundId });
   } catch (error) {
     // Expected when the battle finished or the winner left meanwhile; still logged,
     // so a bonus that was not paid can always be traced.

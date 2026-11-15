@@ -22,6 +22,7 @@ import { SendChatMessage } from "../src/application/usecases/SendChatMessage.js"
 import { StartBattle } from "../src/application/usecases/StartBattle.js";
 import { StartSongChallenge } from "../src/application/usecases/StartSongChallenge.js";
 import { StartWordRace } from "../src/application/usecases/StartWordRace.js";
+import { ResumeWordRace } from "../src/application/usecases/ResumeWordRace.js";
 import { StopWordRace } from "../src/application/usecases/StopWordRace.js";
 import { SubmitSongPhrase } from "../src/application/usecases/SubmitSongPhrase.js";
 import { SubmitWord } from "../src/application/usecases/SubmitWord.js";
@@ -125,6 +126,7 @@ before(async () => {
     openWordRound: new OpenWordRound(rooms, races),
     expireWordRound: new ExpireWordRound(races),
     stopWordRace: new StopWordRace(races),
+    resumeWordRace: new ResumeWordRace(rooms, races),
     broadcaster: createSocketWordRaceBroadcaster(io),
   });
   handlers = registerSocketHandlers(io, {
