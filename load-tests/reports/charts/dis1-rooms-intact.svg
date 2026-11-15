@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="416" viewBox="0 0 760 416" role="img" aria-labelledby="t d">
+  <title id="t">DIS-1 rooms intact per run</title>
+  <desc id="d">Run 0 (before fix): 25 % rooms intact; Smoke (before fix): 0 % rooms intact; Run 1: 100 % rooms intact; Run 2: 100 % rooms intact; Run 3: 100 % rooms intact; Run 4: 100 % rooms intact; Run 5: 100 % rooms intact; Early kill: 100 % rooms intact</desc>
+  <style>
+    svg { --surface: #fcfcfb; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #6f6e69;
+          --grid: #e4e3df; --axis: #a9a8a2; --series-1: #2a78d6; --series-2: #eb6834;
+          --good: #006300; --good-fill: #e3f1e3; --target: #0b0b0b; }
+    @media (prefers-color-scheme: dark) {
+      svg { --surface: #1a1a19; --text-1: #f0efec; --text-2: #c3c2b7; --text-3: #9d9c94;
+            --grid: #2e2e2c; --axis: #5c5b56; --series-1: #3987e5; --series-2: #d95926;
+            --good: #5fc85f; --good-fill: #1f2e1f; --target: #f0efec; }
+    }
+    text { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; fill: var(--text-2); }
+    .title { font-size: 16px; font-weight: 600; fill: var(--text-1); }
+    .subtitle { font-size: 12px; fill: var(--text-2); }
+    .tick { font-size: 11px; fill: var(--text-3); }
+    .label { font-size: 12px; fill: var(--text-1); }
+    .detail { font-size: 11px; fill: var(--text-3); }
+    .value { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .target-label { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .note { font-size: 11px; fill: var(--text-3); }
+  </style>
+  <rect width="760" height="416" fill="var(--surface)"/>
+  <text class="title" x="24" y="30">Rooms that kept their players, state and scores</text>
+  <text class="subtitle" x="24" y="52">Runs before the seat-release fix and the harness fixes lost rooms; after them every run kept 100 %</text>
+  <rect x="24" y="69" width="10" height="10" rx="2" fill="var(--series-2)"/>
+  <text class="label" x="40" y="78">Before the fix</text>
+  <rect x="152.39999999999998" y="69" width="10" height="10" rx="2" fill="var(--series-1)"/>
+  <text class="label" x="168.39999999999998" y="78">After the fix</text>
+  <line x1="150" x2="150" y1="90" y2="368" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="150" y="386" text-anchor="middle">0 %</text>
+  <line x1="272.5" x2="272.5" y1="90" y2="368" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="272.5" y="386" text-anchor="middle">25 %</text>
+  <line x1="395" x2="395" y1="90" y2="368" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="395" y="386" text-anchor="middle">50 %</text>
+  <line x1="517.5" x2="517.5" y1="90" y2="368" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="517.5" y="386" text-anchor="middle">75 %</text>
+  <line x1="640" x2="640" y1="90" y2="368" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="640" y="386" text-anchor="middle">100 %</text>
+  <text class="label" x="140" y="113" text-anchor="end">Run 0</text>
+  <text class="detail" x="140" y="126" text-anchor="end">140 users, 20 rooms</text>
+  <path d="M150,104 H268.5 Q272.5,104 272.5,108 V118 Q272.5,122 268.5,122 H150 Z" fill="var(--series-2)"><title>Run 0 (before fix): 25 % (5/20)</title></path>
+  <text class="value" x="278.5" y="117">25 % (5/20)</text>
+  <text class="label" x="140" y="147" text-anchor="end">Smoke</text>
+  <text class="detail" x="140" y="160" text-anchor="end">14 users, 2 rooms</text>
+  
+  <text class="value" x="156" y="151">0 % (0/2)</text>
+  <text class="label" x="140" y="181" text-anchor="end">Run 1</text>
+  <text class="detail" x="140" y="194" text-anchor="end">140 users, 20 rooms</text>
+  <path d="M150,172 H636 Q640,172 640,176 V186 Q640,190 636,190 H150 Z" fill="var(--series-1)"><title>Run 1: 100 % (20/20)</title></path>
+  <text class="value" x="646" y="185">100 % (20/20)</text>
+  <text class="label" x="140" y="215" text-anchor="end">Run 2</text>
+  <text class="detail" x="140" y="228" text-anchor="end">140 users, 20 rooms</text>
+  <path d="M150,206 H636 Q640,206 640,210 V220 Q640,224 636,224 H150 Z" fill="var(--series-1)"><title>Run 2: 100 % (20/20)</title></path>
+  <text class="value" x="646" y="219">100 % (20/20)</text>
+  <text class="label" x="140" y="249" text-anchor="end">Run 3</text>
+  <text class="detail" x="140" y="262" text-anchor="end">140 users, 20 rooms</text>
+  <path d="M150,240 H636 Q640,240 640,244 V254 Q640,258 636,258 H150 Z" fill="var(--series-1)"><title>Run 3: 100 % (20/20)</title></path>
+  <text class="value" x="646" y="253">100 % (20/20)</text>
+  <text class="label" x="140" y="283" text-anchor="end">Run 4</text>
+  <text class="detail" x="140" y="296" text-anchor="end">140 users, 20 rooms</text>
+  <path d="M150,274 H636 Q640,274 640,278 V288 Q640,292 636,292 H150 Z" fill="var(--series-1)"><title>Run 4: 100 % (20/20)</title></path>
+  <text class="value" x="646" y="287">100 % (20/20)</text>
+  <text class="label" x="140" y="317" text-anchor="end">Run 5</text>
+  <text class="detail" x="140" y="330" text-anchor="end">140 users, 20 rooms</text>
+  <path d="M150,308 H636 Q640,308 640,312 V322 Q640,326 636,326 H150 Z" fill="var(--series-1)"><title>Run 5: 100 % (20/20)</title></path>
+  <text class="value" x="646" y="321">100 % (20/20)</text>
+  <text class="label" x="140" y="351" text-anchor="end">Early kill</text>
+  <text class="detail" x="140" y="364" text-anchor="end">14 users, 2 rooms</text>
+  <path d="M150,342 H636 Q640,342 640,346 V356 Q640,360 636,360 H150 Z" fill="var(--series-1)"><title>Early kill: 100 % (2/2)</title></path>
+  <text class="value" x="646" y="355">100 % (2/2)</text>
+  <line x1="615.5" x2="615.5" y1="86" y2="368" stroke="var(--target)" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="target-label" x="615.5" y="80" text-anchor="middle">Target &gt;= 95 %</text>
+</svg>

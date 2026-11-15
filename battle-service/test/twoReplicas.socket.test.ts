@@ -4,6 +4,7 @@ import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { setTimeout as sleep } from "node:timers/promises";
 import { after, before, describe, it } from "node:test";
+import { Redis } from "ioredis";
 import { Server } from "socket.io";
 import { io as connect, type Socket as ClientSocket } from "socket.io-client";
 import { AwardWordBonus } from "../src/application/usecases/AwardWordBonus.js";
@@ -17,6 +18,7 @@ import { JoinRoom } from "../src/application/usecases/JoinRoom.js";
 import { KickPlayer } from "../src/application/usecases/KickPlayer.js";
 import { OpenWordRound } from "../src/application/usecases/OpenWordRound.js";
 import { ReapRooms } from "../src/application/usecases/ReapRooms.js";
+import { RecordMatchResult } from "../src/application/usecases/RecordMatchResult.js";
 import { SelectRole } from "../src/application/usecases/SelectRole.js";
 import { SendChatMessage } from "../src/application/usecases/SendChatMessage.js";
 import { SetReady } from "../src/application/usecases/SetReady.js";
@@ -24,14 +26,23 @@ import { StartBattle } from "../src/application/usecases/StartBattle.js";
 import { StartRematch } from "../src/application/usecases/StartRematch.js";
 import { StartSongChallenge } from "../src/application/usecases/StartSongChallenge.js";
 import { StartWordRace } from "../src/application/usecases/StartWordRace.js";
+import { ResumeWordRace } from "../src/application/usecases/ResumeWordRace.js";
 import { StopWordRace } from "../src/application/usecases/StopWordRace.js";
 import { SubmitSongPhrase } from "../src/application/usecases/SubmitSongPhrase.js";
 import { SubmitWord } from "../src/application/usecases/SubmitWord.js";
+import type { MatchRecord } from "../src/domain/model/MatchRecord.js";
+import type { MatchResultPublisher } from "../src/domain/ports/MatchResultPublisher.js";
+import { RedisMatchOutbox } from "../src/infrastructure/redis/RedisMatchOutbox.js";
 import { createStateStores, type StateStores } from "../src/infrastructure/redis/stateStores.js";
 import { WordRaceScheduler } from "../src/infrastructure/scheduling/WordRaceScheduler.js";
 import type { RoomDto } from "../src/infrastructure/serialization/roomDto.js";
 import type { WordRoundEndedPayload, WordRoundStartedPayload } from "../src/infrastructure/ws/events.js";
-import { registerSocketHandlers, type BattleServer, type SocketHandlersHandle } from "../src/infrastructure/ws/socketHandlers.js";
+import {
+  registerSocketHandlers,
+  type BattleServer,
+  type SocketDependencies,
+  type SocketHandlersHandle,
+} from "../src/infrastructure/ws/socketHandlers.js";
 import { createSocketWordRaceBroadcaster } from "../src/infrastructure/ws/wordRaceMessages.js";
 import { trustClaimedPlayerId } from "./support/auth.js";
 import { pickSong, readyUp } from "./support/ready.js";
@@ -58,7 +69,10 @@ interface Replica {
   io: BattleServer;
   http: HttpServer;
   handlers: SocketHandlersHandle;
+  scheduler: WordRaceScheduler;
   stores: StateStores;
+  /** Killed by the test (see kill); `after` must not close it again. */
+  dead: boolean;
 }
 
 interface Recorded {
@@ -76,9 +90,12 @@ const adapterKey = `test-${randomUUID().slice(0, 8)}`;
 const replicas: Replica[] = [];
 const clients: ClientSocket[] = [];
 const codes: string[] = [];
+/** Extra Redis connections opened by tests (outbox), closed in `after`. */
+const extraConnections: Redis[] = [];
+const outboxNamespace = `test-outbox-${randomUUID().slice(0, 8)}`;
 
-async function startReplica(name: string): Promise<Replica> {
-  const stores = createStateStores({ url: TEST_REDIS_URL!, ttlSeconds: 300, maxUpdateAttempts: 25, adapterKey });
+async function startReplica(name: string, extra: Partial<SocketDependencies> = {}): Promise<Replica> {
+  const stores = createStateStores({ url: TEST_REDIS_URL!, ttlSeconds: 300, maxUpdateAttempts: 25, adapterKey, adapterRequestsTimeoutMs: 1_500 });
   const { rooms, wordRaces: races } = stores;
   const http = createServer();
   const io: BattleServer = new Server(http, { path: "/socket.io" });
@@ -88,6 +105,7 @@ async function startReplica(name: string): Promise<Replica> {
     openWordRound: new OpenWordRound(rooms, races),
     expireWordRound: new ExpireWordRound(races),
     stopWordRace: new StopWordRace(races),
+    resumeWordRace: new ResumeWordRace(rooms, races),
     broadcaster: createSocketWordRaceBroadcaster(io),
   });
   const handlers = registerSocketHandlers(io, {
@@ -106,6 +124,7 @@ async function startReplica(name: string): Promise<Replica> {
     kickPlayer: new KickPlayer(rooms),
     reapRooms: new ReapRooms(rooms),
     disconnectGraceMs: 50,
+    ...extra,
     wordRace: {
       scheduler,
       submitWord: new SubmitWord(races),
@@ -115,7 +134,7 @@ async function startReplica(name: string): Promise<Replica> {
   });
   await new Promise<void>((resolve) => http.listen(0, resolve));
   const url = `http://localhost:${(http.address() as AddressInfo).port}`;
-  const replica = { name, url, io, http, handlers, stores };
+  const replica: Replica = { name, url, io, http, handlers, scheduler, stores, dead: false };
   replicas.push(replica);
   return replica;
 }
@@ -128,6 +147,61 @@ async function ok<T>(socket: ClientSocket, event: string, payload: unknown): Pro
   const response = await emit<T>(socket, event, payload);
   if (!response.ok) assert.fail(`${event} failed: ${response.error.code} ${response.error.message}`);
   return response.data;
+}
+
+/**
+ * DIS-1: the replica stops abruptly. Its clients lose their connection, every
+ * timer it owned (word race, deadlines, grace periods) is gone, and its Redis
+ * connections close, so it no longer answers adapter requests. Nothing it
+ * stored is cleaned up: the race and the room stay in Redis, as after a crash.
+ */
+async function kill(replica: Replica): Promise<void> {
+  replica.dead = true;
+  await replica.io.close();
+  // The disconnects above armed grace timers on this replica; a dead process has none.
+  replica.handlers.close();
+  replica.scheduler.close();
+  await replica.stores.close();
+}
+
+/** Brings a room with two dancers and two spectators to a running battle, started by `host`. */
+async function battleOn(owner: Replica, seats: Array<[Replica, string, "dancer" | "spectator"]>): Promise<{ code: string; players: Recorded[] }> {
+  const [, hostId] = seats[0];
+  const created = await new CreateRoom(owner.stores.rooms).execute({ hostId, displayName: hostId });
+  codes.push(created.code);
+  const players: Recorded[] = [];
+  for (const [replica, playerId] of seats) players.push(await client(replica, playerId));
+  for (const p of players) await ok(p.socket, "room:join", { roomCode: created.code, playerId: p.playerId, displayName: p.playerId });
+  for (const [i, [, playerId, role]] of seats.entries()) await ok(players[i].socket, "role:select", { roomCode: created.code, playerId, role });
+  await readyUp(created.code, Object.fromEntries(players.map((p) => [p.playerId, p.socket])));
+  await pickSong(owner.stores.rooms, created.code);
+  await ok(players[0].socket, "battle:start", { roomCode: created.code, requesterId: hostId });
+  return { code: created.code, players };
+}
+
+/** The history of every replica of the test goes to this outbox in Redis, like production. */
+function recorder(publisher: MatchResultPublisher): RecordMatchResult {
+  const connection = new Redis(TEST_REDIS_URL!);
+  extraConnections.push(connection);
+  const outbox = new RedisMatchOutbox(connection, { deliveredRetentionSeconds: 300, namespace: outboxNamespace });
+  const quiet = { info: () => undefined, warn: () => undefined, error: () => undefined };
+  return new RecordMatchResult(publisher, { outbox, redeliveryBaseMs: 0, logger: quiet });
+}
+
+/** users-service as each replica sees it: `hang` never answers (the replica dies mid-request). */
+function historyStore(hang: boolean): MatchResultPublisher & { calls: MatchRecord[] } {
+  const calls: MatchRecord[] = [];
+  return {
+    calls,
+    publish(match) {
+      calls.push(match);
+      return hang ? new Promise<void>(() => undefined) : Promise.resolve();
+    },
+  };
+}
+
+function endsOf(rec: Recorded, roundId: string): number {
+  return rec.ended.filter((e) => e.roundId === roundId).length;
 }
 
 async function waitUntil(condition: () => boolean, label: string, timeoutMs = 4000): Promise<void> {
@@ -163,10 +237,14 @@ describe("Two battle-service instances sharing one Redis", { skip: !TEST_REDIS_U
   after(async () => {
     for (const socket of clients) socket.disconnect();
     for (const replica of replicas) {
+      if (replica.dead) continue;
       replica.handlers.close();
+      replica.scheduler.close();
       await replica.io.close();
       await replica.stores.close();
     }
+    if (extraConnections.length > 0) await extraConnections[0].del(`{${outboxNamespace}}:pending`, `{${outboxNamespace}}:delivered`);
+    await Promise.allSettled(extraConnections.map((c) => c.quit()));
   });
 
   it("plays a whole battle with the players split between both instances", async () => {
@@ -251,6 +329,118 @@ describe("Two battle-service instances sharing one Redis", { skip: !TEST_REDIS_U
     const finalRoom = (await one.stores.rooms.findByCode(code))!;
     const wins = Object.values(finalRoom.battle?.wordsWon ?? {}).reduce((a, b) => a + b, 0);
     assert.equal(wins, 2, "two rounds were won, one expired: two scored wins");
+  });
+
+  it("DIS-1: the word race goes on when the replica running its timers dies, each round announced once", async () => {
+    const owner = await startReplica("owner");
+    const survivor = await startReplica("survivor");
+    const { code, players } = await battleOn(owner, [
+      [owner, "k-host", "dancer"],
+      [survivor, "k-guest", "dancer"],
+      [owner, "k-fanA", "spectator"],
+      [survivor, "k-fanB", "spectator"],
+    ]);
+    const [host, guest, fanA, fanB] = players;
+    await waitUntil(() => players.every((p) => p.started.length >= 1), "round 1 on every client");
+    const round1 = guest.started[0];
+
+    await kill(owner);
+    // The owner's clients reconnect through the load balancer to the survivor and repeat room:join.
+    const host2 = await client(survivor, "k-host");
+    const fanA2 = await client(survivor, "k-fanA");
+    for (const p of [host2, fanA2]) await ok(p.socket, "room:join", { roomCode: code, playerId: p.playerId, displayName: p.playerId });
+    assert.ok(host.socket.disconnected && fanA.socket.disconnected);
+
+    // Round 2 opens on the survivor; the guest wins it there.
+    await waitUntil(() => guest.started.length >= 2, "round 2 opened by the survivor");
+    const round2 = guest.started[1];
+    const win = await ok<SubmitAck>(guest.socket, "word:submit", { roomCode: code, playerId: "k-guest", roundId: round2.roundId, text: round2.word });
+    assert.equal(win.outcome, "won");
+    await waitUntil(() => guest.started.length >= 3 && endsOf(guest, guest.started[2].roundId) === 1, "round 3 expired", 6000);
+    await sleep(WINDOW_MS); // a duplicate announcement would show up by now
+
+    const roundIds = guest.started.map((r) => r.roundId);
+    assert.equal(roundIds[0], round1.roundId);
+    assert.equal(new Set(roundIds).size, 3, "three distinct rounds");
+    for (const p of [guest, fanB]) {
+      for (const roundId of roundIds) {
+        assert.equal(p.started.filter((r) => r.roundId === roundId).length, 1, `${p.playerId} saw ${roundId} open once`);
+        assert.equal(endsOf(p, roundId), 1, `${p.playerId} saw ${roundId} end once`);
+      }
+    }
+    for (const p of [host2, fanA2]) {
+      for (const roundId of roundIds.slice(1)) assert.equal(endsOf(p, roundId), 1, `${p.playerId} saw ${roundId} end once after rejoining`);
+    }
+    const stored = (await survivor.stores.rooms.findByCode(code))!;
+    assert.deepEqual(stored.battle?.wordsWon, { "k-host": 0, "k-guest": 1 }, "the win scored once, nothing lost");
+    assert.deepEqual(stored.battle?.wordRoundsAwarded, [round2.roundId]);
+  });
+
+  it("DIS-1: with nobody rejoining, the survivor's periodic sweep resumes the word race", async () => {
+    const owner = await startReplica("owner-2");
+    const survivor = await startReplica("survivor-2");
+    const { players } = await battleOn(owner, [
+      [owner, "w-host", "dancer"],
+      [survivor, "w-guest", "dancer"],
+    ]);
+    const guest = players[1];
+    await waitUntil(() => guest.started.length >= 1, "round 1 on the survivor's client");
+    await kill(owner);
+    await survivor.handlers.sweep();
+    await waitUntil(() => guest.started.length >= 3 && endsOf(guest, guest.started[2].roundId) === 1, "every round ended", 6000);
+    for (const round of guest.started) assert.equal(endsOf(guest, round.roundId), 1, `round ${round.roundNumber} ended once`);
+  });
+
+  it("DIS-1: a finished match whose finisher died before delivering it reaches the history through another replica, once", async () => {
+    const finisherStore = historyStore(true);
+    const survivorStore = historyStore(false);
+    const finisher = await startReplica("finisher", { recordMatchResult: recorder(finisherStore) });
+    const survivor = await startReplica("deliverer", { recordMatchResult: recorder(survivorStore) });
+    const { code, players } = await battleOn(finisher, [
+      [finisher, "o-host", "dancer"],
+      [finisher, "o-guest", "dancer"],
+      [survivor, "o-fan", "spectator"],
+    ]);
+    // A dancer leaves: two dancers are not enough, the battle finishes on the finisher...
+    await ok(players[1].socket, "room:leave", { roomCode: code, playerId: "o-guest" });
+    const battleId = (await survivor.stores.rooms.findByCode(code))!.battle!.id;
+    await waitUntil(() => finisherStore.calls.length === 1, "the finisher sending the match");
+    // ...which dies while users-service has not answered yet.
+    await kill(finisher);
+    // Other suites may share this Redis: their finished rooms are swept too, so count this battle only.
+    const deliveries = () => survivorStore.calls.filter((m) => m.id === battleId).length;
+    assert.equal(deliveries(), 0);
+
+    await survivor.handlers.sweep();
+    assert.equal(deliveries(), 1, "delivered by the survivor");
+    await survivor.handlers.sweep();
+    assert.equal(deliveries(), 1, "and only once");
+  });
+
+  it("DIS-1: a kick on one replica cuts off the kicked player's tabs on the other replica", async () => {
+    const created = await new CreateRoom(one.stores.rooms).execute({ hostId: "x-host", displayName: "Host" });
+    const code = created.code;
+    codes.push(code);
+    const host = await client(one, "x-host");
+    const idle = await client(two, "x-idle");
+    const kicked: unknown[] = [];
+    idle.socket.on("room:kicked", (payload: unknown) => kicked.push(payload));
+    for (const p of [host, idle]) await ok(p.socket, "room:join", { roomCode: code, playerId: p.playerId, displayName: p.playerId });
+
+    await ok(host.socket, "player:kick", { roomCode: code, requesterId: "x-host", playerId: "x-idle" });
+    await waitUntil(() => kicked.length === 1, "room:kicked on the other replica");
+    assert.deepEqual(kicked[0], { roomCode: code });
+
+    // The kicked tab can no longer act in the room...
+    const refused = await emit(idle.socket, "chat:message", { roomCode: code, senderId: "x-idle", content: "still here?" });
+    assert.equal(refused.ok, false);
+    assert.equal(!refused.ok && refused.error.code, "PLAYER_NOT_IN_ROOM");
+    // ...nor receive its events.
+    await ok(host.socket, "chat:message", { roomCode: code, senderId: "x-host", content: "bye" });
+    await waitUntil(() => host.chats.some((m) => m.content === "bye"), "the host's own message");
+    await sleep(100);
+    assert.equal(idle.chats.length, 0);
+    assert.equal((await two.io.in(code).fetchSockets()).length, 1, "only the host is left in the room channel");
   });
 
   it("lets instance 2 join a room that instance 1 created", async () => {

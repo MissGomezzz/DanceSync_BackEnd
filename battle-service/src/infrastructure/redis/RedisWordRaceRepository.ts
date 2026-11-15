@@ -18,6 +18,20 @@ import { defineScript, type ScriptRunner } from "./luaScripts.js";
  */
 const RESULT = `return { applied, redis.call('HGET', k, 's:'..id), redis.call('HGET', k, 'w:'..id), meta }`;
 
+/**
+ * DIS-1: the instant a claim or an expiry is decided at. An empty argument means
+ * "now" by the Redis server's clock (TIME), the same for every replica, so the
+ * claim and expiry windows never depend on which replica's clock asks. Tests
+ * pass an explicit epoch-ms value. TIME is allowed before writes because Redis 7
+ * replicates scripts by their effects.
+ */
+const NOW = (arg: string) => `
+local now = tonumber(${arg})
+if not now then
+  local t = redis.call('TIME')
+  now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+end`;
+
 /** scheduled -> open */
 const OPEN = `
 local k, id = KEYS[1], ARGV[1]
@@ -33,12 +47,13 @@ ${RESULT}`;
 /** open and unclaimed and before closesAt -> won (and one more win for the player), in one step. */
 const CLAIM = `
 local k, id = KEYS[1], ARGV[1]
+${NOW("ARGV[3]")}
 local meta = redis.call('HGET', k, 'meta')
 if not meta then return { 0, false, false, false } end
 local applied = 0
 if redis.call('HGET', k, 's:'..id) == 'open' and not redis.call('HGET', k, 'w:'..id) then
   local closes = tonumber(redis.call('HGET', k, 'c:'..id))
-  if tonumber(ARGV[3]) < closes then
+  if now < closes then
     redis.call('HSET', k, 's:'..id, 'won', 'w:'..id, ARGV[2])
     redis.call('HINCRBY', k, 'n:'..ARGV[2], 1)
     applied = 1
@@ -49,12 +64,13 @@ ${RESULT}`;
 /** open and unclaimed and at or after closesAt -> expired: the complement of the claim condition. */
 const EXPIRE = `
 local k, id = KEYS[1], ARGV[1]
+${NOW("ARGV[2]")}
 local meta = redis.call('HGET', k, 'meta')
 if not meta then return { 0, false, false, false } end
 local applied = 0
 if redis.call('HGET', k, 's:'..id) == 'open' and not redis.call('HGET', k, 'w:'..id) then
   local closes = tonumber(redis.call('HGET', k, 'c:'..id))
-  if tonumber(ARGV[2]) >= closes then
+  if now >= closes then
     redis.call('HSET', k, 's:'..id, 'expired')
     applied = 1
   end
@@ -140,16 +156,21 @@ export class RedisWordRaceRepository implements WordRaceRepository {
     return reply[0] === 1 ? roundFrom(reply, roundId) : null;
   }
 
-  async claimRound(roomCode: string, roundId: string, playerId: string, now: Date): Promise<ClaimRoundResult> {
-    const reply = (await this.claimScript(raceKey(roomCode), roundId, playerId, now.getTime())) as ScriptReply;
+  async claimRound(roomCode: string, roundId: string, playerId: string, now?: Date): Promise<ClaimRoundResult> {
+    const reply = (await this.claimScript(raceKey(roomCode), roundId, playerId, instant(now))) as ScriptReply;
     const round = roundFrom(reply, roundId);
     return reply[0] === 1 && round ? { claimed: true, round } : { claimed: false, round };
   }
 
-  async expireRound(roomCode: string, roundId: string, now: Date): Promise<WordRound | null> {
-    const reply = (await this.expireScript(raceKey(roomCode), roundId, now.getTime())) as ScriptReply;
+  async expireRound(roomCode: string, roundId: string, now?: Date): Promise<WordRound | null> {
+    const reply = (await this.expireScript(raceKey(roomCode), roundId, instant(now))) as ScriptReply;
     return reply[0] === 1 ? roundFrom(reply, roundId) : null;
   }
+}
+
+/** Epoch ms of an explicit instant, or "" to let the script use the Redis server's clock. */
+function instant(now: Date | undefined): string {
+  return now === undefined ? "" : String(now.getTime());
 }
 
 function raceKey(roomCode: string): string {

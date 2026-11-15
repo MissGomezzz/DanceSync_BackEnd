@@ -3,7 +3,7 @@
 // crea la sala por HTTP, conecta cada jugador por Socket.IO, hace room:join y
 // manda mensajes de chat de vez en cuando. Mide conexiones, latencia y caidas.
 //
-// Uso (CMD de Windows), desde la carpeta battle-service (ya trae socket.io-client):
+// Uso (CMD de Windows), desde la carpeta load-tests (tras `npm install`, trae socket.io-client):
 //   set BASE=https://TU-GATEWAY.azurecontainerapps.io
 //   set USERS=40
 //   node carga-dancesync.mjs

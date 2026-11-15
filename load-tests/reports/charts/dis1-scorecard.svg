@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="252" viewBox="0 0 760 252" role="img" aria-labelledby="t d">
+  <title id="t">DIS-1 availability scorecard</title>
+  <desc id="d">Service restored: 6.2 s (Target &lt; 30 s, met); Rooms intact: 100 % (Target &gt;= 95 %, met); Results lost: 0 (Target 0, met); Results counted twice: 0 (Target 0, met)</desc>
+  <style>
+    svg { --surface: #fcfcfb; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #6f6e69;
+          --grid: #e4e3df; --axis: #a9a8a2; --series-1: #2a78d6; --series-2: #eb6834;
+          --good: #006300; --good-fill: #e3f1e3; --target: #0b0b0b; }
+    @media (prefers-color-scheme: dark) {
+      svg { --surface: #1a1a19; --text-1: #f0efec; --text-2: #c3c2b7; --text-3: #9d9c94;
+            --grid: #2e2e2c; --axis: #5c5b56; --series-1: #3987e5; --series-2: #d95926;
+            --good: #5fc85f; --good-fill: #1f2e1f; --target: #f0efec; }
+    }
+    text { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; fill: var(--text-2); }
+    .title { font-size: 16px; font-weight: 600; fill: var(--text-1); }
+    .subtitle { font-size: 12px; fill: var(--text-2); }
+    .tick { font-size: 11px; fill: var(--text-3); }
+    .label { font-size: 12px; fill: var(--text-1); }
+    .detail { font-size: 11px; fill: var(--text-3); }
+    .value { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .target-label { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .note { font-size: 11px; fill: var(--text-3); }
+  </style>
+  <rect width="760" height="252" fill="var(--surface)"/>
+  <text class="title" x="24" y="30">DIS-1 availability: all four measures met</text>
+  <text class="subtitle" x="24" y="52">6 failover runs after the fix, 357/357 disconnected clients back. One of two battle-service replicas killed (SIGKILL) mid-battle.</text>
+  <g>
+    <rect x="24" y="76" width="172" height="132" rx="8" fill="none" stroke="var(--grid)" stroke-width="1"/>
+    <text class="subtitle" x="38" y="100">Service restored</text>
+    <text x="38" y="138" style="font-size: 30px; font-weight: 600; fill: var(--text-1)">6.2 s</text>
+    <text class="detail" x="38" y="156">worst run</text>
+    <text class="label" x="38" y="188">Target &lt; 30 s</text>
+    <rect x="130" y="174" width="54" height="20" rx="10" fill="var(--good-fill)"/>
+    <text x="157" y="188" text-anchor="middle" style="font-size: 11px; font-weight: 600; fill: var(--good)">&#10003; Met</text>
+  </g>
+  <g>
+    <rect x="208" y="76" width="172" height="132" rx="8" fill="none" stroke="var(--grid)" stroke-width="1"/>
+    <text class="subtitle" x="222" y="100">Rooms intact</text>
+    <text x="222" y="138" style="font-size: 30px; font-weight: 600; fill: var(--text-1)">100 %</text>
+    <text class="detail" x="222" y="156">worst run</text>
+    <text class="label" x="222" y="188">Target &gt;= 95 %</text>
+    <rect x="314" y="174" width="54" height="20" rx="10" fill="var(--good-fill)"/>
+    <text x="341" y="188" text-anchor="middle" style="font-size: 11px; font-weight: 600; fill: var(--good)">&#10003; Met</text>
+  </g>
+  <g>
+    <rect x="392" y="76" width="172" height="132" rx="8" fill="none" stroke="var(--grid)" stroke-width="1"/>
+    <text class="subtitle" x="406" y="100">Results lost</text>
+    <text x="406" y="138" style="font-size: 30px; font-weight: 600; fill: var(--text-1)">0</text>
+    <text class="detail" x="406" y="156">of 102 battles</text>
+    <text class="label" x="406" y="188">Target 0</text>
+    <rect x="498" y="174" width="54" height="20" rx="10" fill="var(--good-fill)"/>
+    <text x="525" y="188" text-anchor="middle" style="font-size: 11px; font-weight: 600; fill: var(--good)">&#10003; Met</text>
+  </g>
+  <g>
+    <rect x="576" y="76" width="172" height="132" rx="8" fill="none" stroke="var(--grid)" stroke-width="1"/>
+    <text class="subtitle" x="590" y="100">Results counted twice</text>
+    <text x="590" y="138" style="font-size: 30px; font-weight: 600; fill: var(--text-1)">0</text>
+    <text class="detail" x="590" y="156">results and rounds</text>
+    <text class="label" x="590" y="188">Target 0</text>
+    <rect x="682" y="174" width="54" height="20" rx="10" fill="var(--good-fill)"/>
+    <text x="709" y="188" text-anchor="middle" style="font-size: 11px; font-weight: 600; fill: var(--good)">&#10003; Met</text>
+  </g>
+  <text class="note" x="24" y="236">Local prototype: Docker Desktop, 0.5 CPU and 512 MB per replica, nginx, Redis. Source: load-tests/reports/failover-*.json</text>
+</svg>

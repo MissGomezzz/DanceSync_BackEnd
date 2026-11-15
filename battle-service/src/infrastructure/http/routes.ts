@@ -25,7 +25,16 @@ export interface HttpDependencies {
   leaveRoom?: (roomCode: string, playerId: string) => Promise<unknown>;
   /** Releases the seat after a short grace unless the player rejoins (a reload); see the leave route. */
   leaveAfterPagehide?: (roomCode: string, playerId: string) => void;
+  /**
+   * Readiness (DIS-1): resolves when this replica can serve rooms (its shared
+   * state store answers), rejects otherwise. Absent: always ready.
+   */
+  readiness?: () => Promise<void>;
+  /** Longest wait for `readiness` before answering 503; below the probe's own timeout. Default 800 ms. */
+  readinessTimeoutMs?: number;
 }
+
+const DEFAULT_READINESS_TIMEOUT_MS = 800;
 
 /** Why the client is leaving; see POST /api/rooms/:code/leave. */
 type LeaveReason = "explicit" | "pagehide";
@@ -67,8 +76,23 @@ export function buildRouter(deps: HttpDependencies): Router {
   const auth = createHttpAuth(deps.auth);
   router.use(auth.correlation);
 
+  // Liveness: the process answers HTTP. Cheap on purpose, so a slow dependency
+  // never makes the platform restart a replica that is otherwise healthy.
   router.get("/api/battles/health", (_req, res) => {
     res.json({ status: "UP", service: "battle-service" });
+  });
+
+  // Readiness (DIS-1): this replica can serve rooms right now, i.e. the state
+  // shared with the other replicas (Redis) answers. A replica that is not ready
+  // is taken out of the load balancer's rotation until it is again.
+  router.get("/api/battles/health/ready", async (_req, res) => {
+    try {
+      await withTimeout(deps.readiness?.() ?? Promise.resolve(), deps.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS);
+      res.json({ status: "UP", service: "battle-service", checks: { stateStore: "UP" } });
+    } catch (error) {
+      console.warn(`Readiness check failed: ${error instanceof Error ? error.message : String(error)}`);
+      res.status(503).json({ status: "DOWN", service: "battle-service", checks: { stateStore: "DOWN" } });
+    }
   });
 
   // Registered users only: a guest token is refused with 403. The host is the
@@ -224,4 +248,12 @@ function clientErrorStatus(error: unknown): number | null {
   const code = typeof status === "number" ? status : typeof statusCode === "number" ? statusCode : null;
   if (code !== null && Number.isInteger(code) && code >= 400 && code < 500) return code;
   return type === "entity.parse.failed" ? 400 : null;
+}
+
+function withTimeout(check: Promise<void>, timeoutMs: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`no answer within ${timeoutMs} ms`)), timeoutMs);
+  });
+  return Promise.race([check, timeout]).finally(() => clearTimeout(timer));
 }

@@ -1,4 +1,4 @@
-import type { Server, Socket } from "socket.io";
+import type { RemoteSocket, Server, Socket } from "socket.io";
 import type { JoinRoom, JoinRoomInput, LeaveRoomOutput } from "../../application/usecases/JoinRoom.js";
 import type { KickPlayer } from "../../application/usecases/KickPlayer.js";
 import type { ReapRooms } from "../../application/usecases/ReapRooms.js";
@@ -38,6 +38,8 @@ import {
 
 export type BattleServer = Server<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
 type BattleSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
+/** A socket of this replica or of another one (through the adapter). */
+type AnySocket = RemoteSocket<ServerToClientEvents, SocketData>;
 
 export interface SocketDependencies {
   /**
@@ -64,7 +66,8 @@ export interface SocketDependencies {
   finishBattleAtDeadline: FinishBattleAtDeadline;
   /**
    * Stores every finished battle in the match history (HU 21), in the
-   * background. Optional so harnesses that do not exercise it can omit it.
+   * background, through a durable outbox the sweep drains (DIS-1). Optional so
+   * harnesses that do not exercise it can omit it.
    */
   recordMatchResult?: RecordMatchResult;
   /** Lists rooms and deletes empty ones for the abandoned-room sweep. */
@@ -263,6 +266,31 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     await deps.wordRace?.scheduler.stop(room.code);
   }
 
+  /**
+   * DIS-1: arms on this replica the timers of the room's pending word rounds
+   * (from their absolute times in the store) and pays any bonus of a won round
+   * that the claiming replica could not pay before dying. Safe to run on every
+   * replica and as often as wanted: timers are armed once per replica, round
+   * transitions are atomic and only the replica whose transition applied
+   * broadcasts it, and bonuses are paid once per round. Never throws: the word
+   * race must not break a join or the sweep.
+   */
+  async function resumeWordRace(roomCode: string): Promise<void> {
+    const wordRace = deps.wordRace;
+    if (!wordRace) return;
+    try {
+      const race = await wordRace.scheduler.resume(roomCode);
+      if (!race) return;
+      const { room, paidRoundIds } = await wordRace.awardWordBonus.reconcile(race);
+      if (room && paidRoundIds.length > 0) {
+        console.warn(`Word bonus of rounds ${paidRoundIds.join(", ")} in room ${room.code} paid on resume`);
+        publishRoom(room);
+      }
+    } catch (error) {
+      if (!(error instanceof DomainError)) console.error(`Error resuming the word race of room ${roomCode}`, error);
+    }
+  }
+
   /** Tells a spectator (every tab, through their player channel) what their current vote is. */
   function emitVoteMine(roomCode: string, voterId: string, dancerId: string | null): void {
     io.to(playerChannel(voterId)).emit(ServerEvents.VOTE_MINE, { roomCode, dancerId });
@@ -319,7 +347,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     const timer = setTimeout(() => {
       graceTimers.delete(key);
       graceDeadlines.delete(key);
-      void releaseSeatIfAbandoned(roomCode, playerId);
+      void releaseSeatIfAbandoned(roomCode, playerId, `no socket ${delayMs} ms after a disconnect`);
     }, delayMs);
     timer.unref();
     graceTimers.set(key, timer);
@@ -327,20 +355,26 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   }
 
   /**
-   * Detaches every local socket bound to (roomCode, playerId): it leaves the room
-   * and player channels and loses its binding, so a second tab of a player who
-   * left can no longer act (requireOwnSeat fails) nor receive the room's events.
+   * Detaches every socket bound to (roomCode, playerId), on every replica
+   * (DIS-1: with several replicas a player's tabs may sit on another one): it
+   * leaves the room and player channels, so a second tab of a player who left
+   * can neither receive the room's events nor act (requireOwnSeat checks the
+   * room channel, and clears the stale binding of a socket of another replica).
    */
   async function unbindPlayer(
     roomCode: string,
     playerId: string,
-    beforeUnbind?: (socket: BattleSocket) => void,
+    beforeUnbind?: (socket: AnySocket) => void,
   ): Promise<void> {
-    for (const socket of io.of("/").sockets.values()) {
+    for (const socket of await io.in(playerChannel(playerId)).fetchSockets()) {
       const { roomCode: bound, playerId: boundPlayer } = socket.data;
       if (!bound || boundPlayer !== playerId || bound.toUpperCase() !== roomCode.toUpperCase()) continue;
       beforeUnbind?.(socket);
-      await unbindSocket(socket);
+      socket.leave(bound);
+      socket.leave(playerChannel(playerId));
+      // A socket of this replica also loses its binding right away.
+      const local = io.of("/").sockets.get(socket.id);
+      if (local) await unbindSocket(local);
     }
   }
 
@@ -353,9 +387,11 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     return left;
   }
 
-  async function releaseSeatIfAbandoned(roomCode: string, playerId: string): Promise<void> {
+  async function releaseSeatIfAbandoned(roomCode: string, playerId: string, why: string): Promise<void> {
     try {
       if (await isBound(roomCode, playerId)) return; // Player is back.
+      // Traceable (DIS-1): a seat released during a failover means a client did not get back in time.
+      console.info(`Seat of ${playerId} in room ${roomCode} released: ${why}`);
       await leaveRoom(roomCode, playerId);
     } catch (error) {
       // The player may have left explicitly or the room may already be gone.
@@ -370,16 +406,35 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
   function watchNewRoom(roomCode: string, hostId: string): void {
     const key = seatKey(roomCode, hostId);
-    unboundSince.set(key, Date.now());
     clearTimeout(newRoomTimers.get(key));
     const timer = setTimeout(() => {
       newRoomTimers.delete(key);
       // A pending disconnect grace means the host did connect: that timer decides.
       if (graceTimers.has(key)) return;
-      void releaseSeatIfAbandoned(roomCode, hostId);
+      void releaseHostOfUnusedRoom(roomCode, hostId);
     }, createdRoomGraceMs);
     timer.unref();
     newRoomTimers.set(key, timer);
+  }
+
+  /**
+   * The new-room deadline only reaps a room nobody used: the host still alone
+   * in the lobby. A room that others joined (or a battle) proves the host did
+   * connect; from then on the seat follows the grace period and the sweep,
+   * which need it unbound for disconnectGraceMs. DIS-1: this timer lives on the
+   * replica that served POST /api/rooms, so it may fire while the host is
+   * reconnecting after a failover, and a single "not bound right now" must not
+   * release a seat in a running battle.
+   */
+  async function releaseHostOfUnusedRoom(roomCode: string, hostId: string): Promise<void> {
+    try {
+      const room = await deps.reapRooms.find(roomCode);
+      if (!room || room.status !== "waiting" || room.players.some((p) => p.id !== hostId)) return;
+    } catch (error) {
+      console.error("Error reading a new room before reaping it", error);
+      return;
+    }
+    await releaseSeatIfAbandoned(roomCode, hostId, "the host never connected after creating the room");
   }
 
   /**
@@ -388,39 +443,65 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
    * normal leave path, which also finishes a battle the departure ends),
    * deletes rooms left empty, and re-arms each room's deadlines, which settles
    * any deadline whose timer did not run.
+   *
+   * DIS-1: every replica runs it, so it also takes over what a dead replica
+   * left behind (word races, undelivered match results), and one room that
+   * fails (e.g. an adapter request timing out) never stops the others.
    */
   async function sweep(): Promise<void> {
     const now = Date.now();
     const seen = new Set<string>();
+    // Rooms whose timers this replica armed before listing: those missing from
+    // the list were deleted elsewhere, and their timers can go.
+    const armedBefore = [...armedVersions.keys()];
+    const listed = new Set<string>();
     for (const room of await deps.reapRooms.list()) {
-      if (room.players.length === 0) {
-        if (await deps.reapRooms.deleteIfEmpty(room.code)) {
-          await announceLeave(room.code, { room: null, battleFinished: false, discardedVoterIds: [] });
-        }
-        continue;
-      }
-      armRoomTimers(room);
-      const bound = new Set((await io.in(room.code).fetchSockets()).map((s) => s.data.playerId));
-      for (const player of room.players) {
-        const key = seatKey(room.code, player.id);
-        seen.add(key);
-        if (bound.has(player.id)) {
-          unboundSince.delete(key);
-          continue;
-        }
-        // A pending grace or new-room timer will decide this seat on its own.
-        if (graceTimers.has(key) || newRoomTimers.has(key)) continue;
-        const since = unboundSince.get(key);
-        if (since === undefined) {
-          unboundSince.set(key, now);
-        } else if (now - since >= deps.disconnectGraceMs) {
-          unboundSince.delete(key);
-          await releaseSeatIfAbandoned(room.code, player.id);
-        }
+      listed.add(room.code.toUpperCase());
+      for (const player of room.players) seen.add(seatKey(room.code, player.id));
+      try {
+        await sweepRoom(room, now);
+      } catch (error) {
+        console.error(`Error sweeping room ${room.code}`, error);
+        // Its seats could not be observed: a gap in the observations must never
+        // count as time without a socket (DIS-1, e.g. during a failover).
+        for (const player of room.players) unboundSince.delete(seatKey(room.code, player.id));
       }
     }
+    for (const key of armedBefore) if (!listed.has(key)) forgetRoomTimers(key);
     // Forget seats that no longer exist.
     for (const key of unboundSince.keys()) if (!seen.has(key)) unboundSince.delete(key);
+    // DIS-1: every replica delivers the results still pending, whoever finished the battle.
+    await deps.recordMatchResult?.drain();
+  }
+
+  async function sweepRoom(room: Room, now: number): Promise<void> {
+    // DIS-1: a finisher that died before enqueuing its result leaves it to this sweep.
+    if (room.status === "finished") await deps.recordMatchResult?.enqueueFinished(room);
+    if (room.players.length === 0) {
+      if (await deps.reapRooms.deleteIfEmpty(room.code)) {
+        await announceLeave(room.code, { room: null, battleFinished: false, discardedVoterIds: [] });
+      }
+      return;
+    }
+    armRoomTimers(room);
+    if (room.status === "battling") await resumeWordRace(room.code);
+    const bound = new Set((await io.in(room.code).fetchSockets()).map((s) => s.data.playerId));
+    for (const player of room.players) {
+      const key = seatKey(room.code, player.id);
+      if (bound.has(player.id)) {
+        unboundSince.delete(key);
+        continue;
+      }
+      // A pending grace or new-room timer will decide this seat on its own.
+      if (graceTimers.has(key) || newRoomTimers.has(key)) continue;
+      const since = unboundSince.get(key);
+      if (since === undefined) {
+        unboundSince.set(key, now);
+      } else if (now - since >= deps.disconnectGraceMs) {
+        unboundSince.delete(key);
+        await releaseSeatIfAbandoned(room.code, player.id, `unbound for ${now - since} ms (sweep)`);
+      }
+    }
   }
 
   /** Joining as someone else or somewhere else first releases the seat bound so far. */
@@ -470,7 +551,12 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         await socket.join(room.code);
         await socket.join(playerChannel(playerId));
         publishRoom(room);
-        if (room.status === "battling") await resyncWordRound(socket, deps, room.code);
+        if (room.status === "battling") {
+          // DIS-1: this replica takes the word race over if the one running its
+          // timers died (the player may be rejoining precisely because of that).
+          await resumeWordRace(room.code);
+          await resyncWordRound(socket, deps, room.code);
+        }
         // A spectator back after a refresh gets their vote again (privately).
         if (room.battle && room.spectators.some((s) => s.id === playerId)) {
           socket.emit(ServerEvents.VOTE_MINE, { roomCode: room.code, dancerId: RoomService.voteOf(room, playerId) });
@@ -538,7 +624,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         // Only the submission whose atomic claim succeeded announces the winner, so
         // the room receives exactly one word:round-ended per round.
         if (result.outcome === "won") {
-          const bonus = await awardWordBonus(deps.wordRace, roomCode, playerId);
+          const bonus = await awardWordBonus(deps.wordRace, roomCode, playerId, result.round.id);
           io.to(roomCode).emit(
             ServerEvents.WORD_ROUND_ENDED,
             roundEndedPayload(result.race, result.round, bonus?.battle?.scoring.wordBonusPoints ?? 0),
@@ -636,6 +722,13 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       }),
     );
 
+    // A socket unbound from another replica (kick, leave) still carries its old
+    // binding here; its seat is no longer its own, so no grace period applies.
+    socket.on("disconnecting", () => {
+      const { roomCode } = socket.data;
+      if (roomCode && !socket.rooms.has(roomCode)) clearBinding(socket);
+    });
+
     socket.on("disconnect", () => {
       const { playerId, roomCode } = socket.data;
       if (!playerId || !roomCode) return;
@@ -674,8 +767,7 @@ function seatKey(roomCode: string, playerId: string): string {
 /** Drops the socket's binding and its room and player channels. */
 async function unbindSocket(socket: BattleSocket): Promise<void> {
   const { roomCode, playerId } = socket.data;
-  socket.data.roomCode = undefined;
-  socket.data.playerId = undefined;
+  clearBinding(socket);
   if (roomCode) await socket.leave(roomCode);
   if (playerId) await socket.leave(playerChannel(playerId));
 }
@@ -688,9 +780,10 @@ async function awardWordBonus(
   wordRace: WordRaceSocketDependencies,
   roomCode: string,
   playerId: string,
+  roundId: string,
 ): Promise<Room | null> {
   try {
-    return await wordRace.awardWordBonus.execute({ roomCode, playerId });
+    return await wordRace.awardWordBonus.execute({ roomCode, playerId, roundId });
   } catch (error) {
     // Expected when the battle finished or the winner left meanwhile; still logged,
     // so a bonus that was not paid can always be traced.
@@ -708,6 +801,11 @@ async function resyncWordRound(socket: BattleSocket, deps: SocketDependencies, r
   if (!deps.wordRace) return;
   const active = await deps.wordRace.getActiveWordRound.execute({ roomCode });
   if (active) socket.emit(ServerEvents.WORD_ROUND_STARTED, roundStartedPayload(active.race, active.round, new Date()));
+}
+
+function clearBinding(socket: BattleSocket): void {
+  socket.data.roomCode = undefined;
+  socket.data.playerId = undefined;
 }
 
 function playerChannel(playerId: string): string {
@@ -752,6 +850,10 @@ function requireRoomScope(
  * in nor impersonate another player (kick them, start as the host, chat or
  * vote as them): an id it sends is only cross-checked, and naming someone else
  * is refused. Room codes are case-insensitive, like the repository lookup.
+ *
+ * The socket must still be in the room channel: another replica may have
+ * unbound it (kick, leave from another tab) and could only take it out of the
+ * channel, not clear its binding here (DIS-1). Such a stale binding is cleared.
  */
 function requireOwnSeat(
   socket: BattleSocket,
@@ -767,6 +869,10 @@ function requireOwnSeat(
     (claimedPlayerId !== undefined && claimedPlayerId !== joinedPlayer)
   ) {
     throw new DomainError("PLAYER_NOT_IN_ROOM", "The socket has not joined this room as this player");
+  }
+  if (!socket.rooms.has(joinedRoom)) {
+    clearBinding(socket);
+    throw new DomainError("PLAYER_NOT_IN_ROOM", "The socket was removed from this room");
   }
   return { roomCode: joinedRoom, playerId: joinedPlayer };
 }

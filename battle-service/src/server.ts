@@ -30,6 +30,7 @@ import { StartWordRace } from "./application/usecases/StartWordRace.js";
 import { OpenWordRound } from "./application/usecases/OpenWordRound.js";
 import { ExpireWordRound } from "./application/usecases/ExpireWordRound.js";
 import { StopWordRace } from "./application/usecases/StopWordRace.js";
+import { ResumeWordRace } from "./application/usecases/ResumeWordRace.js";
 import { SubmitWord } from "./application/usecases/SubmitWord.js";
 import { GetActiveWordRound } from "./application/usecases/GetActiveWordRound.js";
 import { createStateStores } from "./infrastructure/redis/stateStores.js";
@@ -94,6 +95,9 @@ const httpServer = createServer(app);
 const io: BattleServer = new Server(httpServer, {
   path: "/socket.io",
   cors: { origin: env.corsOrigin, credentials: true },
+  // DIS-1: detect a dead connection (and so a dead replica) in seconds.
+  pingInterval: env.socketPingIntervalMs,
+  pingTimeout: env.socketPingTimeoutMs,
 });
 stateStores.attachAdapter(io);
 const wordRaceScheduler = new WordRaceScheduler({
@@ -106,6 +110,7 @@ const wordRaceScheduler = new WordRaceScheduler({
   openWordRound: new OpenWordRound(rooms, wordRaces),
   expireWordRound: new ExpireWordRound(wordRaces),
   stopWordRace: new StopWordRace(wordRaces),
+  resumeWordRace: new ResumeWordRace(rooms, wordRaces),
   broadcaster: createSocketWordRaceBroadcaster(io),
 });
 const socketHandlers = registerSocketHandlers(io, {
@@ -124,10 +129,14 @@ const socketHandlers = registerSocketHandlers(io, {
   kickPlayer: new KickPlayer(rooms),
   finishBattleAtDeadline: new FinishBattleAtDeadline(rooms),
   // Finished battles go to users-service (PUT /api/matches/{battleId}), retried with backoff.
-  recordMatchResult: new RecordMatchResult(new HttpMatchResultPublisher(env.usersServiceUrl)),
+  // DIS-1: through a durable outbox that every replica's sweep drains, so no result is lost.
+  recordMatchResult: new RecordMatchResult(new HttpMatchResultPublisher(env.usersServiceUrl), {
+    outbox: stateStores.matchOutbox,
+  }),
   reapRooms: new ReapRooms(rooms),
   disconnectGraceMs: env.disconnectGraceMs,
   pagehideGraceMs: env.pagehideGraceMs,
+  reaping: { sweepIntervalMs: env.roomSweepIntervalMs },
   wordRace: {
     scheduler: wordRaceScheduler,
     submitWord: new SubmitWord(wordRaces),
@@ -153,6 +162,7 @@ app.use(
     onRoomCreated: (room) => socketHandlers.watchNewRoom(room.code, room.hostId),
     leaveRoom: (roomCode, playerId) => socketHandlers.leave(roomCode, playerId),
     leaveAfterPagehide: (roomCode, playerId) => socketHandlers.leaveAfterPagehide(roomCode, playerId),
+    readiness: () => stateStores.ping(),
   }),
 );
 app.use(errorHandler);
@@ -164,6 +174,8 @@ httpServer.listen(env.port, () => {
 function shutdown(signal: string): void {
   console.log(`${signal} received, shutting down battle-service`);
   socketHandlers.close();
+  // Only this replica's timers: the races stay in the store for the other replicas.
+  wordRaceScheduler.close();
   io.close();
   httpServer.close(() => {
     void stateStores.close().finally(() => process.exit(0));

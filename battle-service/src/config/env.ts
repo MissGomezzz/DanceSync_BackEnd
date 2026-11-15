@@ -120,6 +120,20 @@ export function loadEnv(source: Source = process.env) {
      * and for the moment the battle finishes on its own.
      */
     wordRaceFallbackDurationMs: read("WORD_RACE_FALLBACK_DURATION_MS", 90_000, "positive"),
+    /**
+     * Socket.IO heartbeat (DIS-1): the server pings every client this often and
+     * drops a connection that does not answer within the timeout, so a client
+     * behind a dead or hung replica notices it within interval + timeout and
+     * reconnects to a live one. Socket.IO's defaults are 25 s + 20 s.
+     */
+    socketPingIntervalMs: read("SOCKET_PING_INTERVAL_MS", 10_000, "positive-integer"),
+    socketPingTimeoutMs: read("SOCKET_PING_TIMEOUT_MS", 5_000, "positive-integer"),
+    /**
+     * Period of the housekeeping sweep each replica runs (DIS-1): it releases
+     * abandoned seats, resumes the word races of running battles and delivers
+     * pending match results, whoever started them.
+     */
+    roomSweepIntervalMs: read("ROOM_SWEEP_INTERVAL_MS", 15_000, "positive-integer"),
     /** Token validation: Microsoft Entra ID for registered users, a shared secret for guests. */
     auth: readAuth(source, read),
   } as const;

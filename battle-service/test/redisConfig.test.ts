@@ -23,6 +23,7 @@ describe("Redis configuration", () => {
       ttlSeconds: 600,
       maxUpdateAttempts: 5,
       adapterKey: "staging",
+      adapterRequestsTimeoutMs: 1_500,
     });
   });
 

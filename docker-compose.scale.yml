@@ -31,8 +31,9 @@ x-battle: &battle
       condition: service_healthy
     fake-entra:
       condition: service_healthy
+  # DIS-1: readiness (Redis answers), not just liveness: a replica is healthy only when it can serve rooms.
   healthcheck:
-    test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/battles/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+    test: ["CMD", "node", "-e", "fetch('http://localhost:3000/api/battles/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
     interval: 5s
     timeout: 3s
     retries: 10
@@ -68,13 +69,13 @@ services:
     <<: *battle
     container_name: dancesync-battle-1
     ports:
-      - "3001:3000"
+      - "${BATTLE_1_PORT:-3001}:3000"
 
   battle-2:
     <<: *battle
     container_name: dancesync-battle-2
     ports:
-      - "3002:3000"
+      - "${BATTLE_2_PORT:-3002}:3000"
 
   nginx:
     image: nginx:1.27-alpine

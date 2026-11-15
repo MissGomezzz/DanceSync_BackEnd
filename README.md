@@ -139,6 +139,9 @@ Defaults live in `.env.example`; every service falls back to the same values whe
 | `REDIS_STATE_TTL_SECONDS` | `86400` | battle-service (positive whole number; a room or word race key that is never touched again expires after this long) |
 | `REDIS_UPDATE_MAX_ATTEMPTS` | `12` | battle-service (positive whole number; attempts of an optimistic room update that keeps losing the race before giving up) |
 | `SOCKETIO_REDIS_KEY` | `dancesync` | battle-service (prefix of the Socket.IO adapter channels; every instance of one deployment must share it) |
+| `REDIS_ADAPTER_REQUESTS_TIMEOUT_MS` | `1500` | battle-service (DIS-1; positive whole number; how long a cross-instance request such as `fetchSockets` waits for the other instances) |
+| `SOCKET_PING_INTERVAL_MS` / `SOCKET_PING_TIMEOUT_MS` | `10000` / `5000` | battle-service (DIS-1; positive whole numbers; Socket.IO heartbeat: a connection that does not answer within the timeout is dropped and the client reconnects) |
+| `ROOM_SWEEP_INTERVAL_MS` | `15000` | battle-service (DIS-1; positive whole number; period of the sweep that releases abandoned seats, resumes word races and delivers pending match results) |
 | `RATE_LIMIT_EVENTS_PER_SECOND` / `RATE_LIMIT_EVENT_BURST` | `20` / `40` | battle-service (SEG-3; token bucket of each Socket.IO connection) |
 | `RATE_LIMIT_STRIKE_THRESHOLD` / `RATE_LIMIT_STRIKE_WINDOW_SECONDS` / `RATE_LIMIT_BLOCK_SECONDS` | `40` / `10` / `30` | battle-service (SEG-3; more than the threshold of dropped events within the window blocks the client for that long) |
 | `TRUSTED_PROXY_HOPS` | `0` | battle-service, api-gateway (SEG-3; proxies in front of the service whose `X-Forwarded-For` entry is trusted to find the client's address) |
@@ -196,8 +199,8 @@ Through the gateway only `GET /api/matches` and `GET /api/matches/**` are expose
 
 HTTP:
 
-- `GET /api/battles/health`
-Every route below except the health check and the guest token needs `Authorization: Bearer <token>` (see [Authentication](#authentication-seg-1)); without a valid one the answer is `401`, and `403` when a guest token is used outside its room or for a registered-only action.
+- `GET /api/battles/health` (liveness) and `GET /api/battles/health/ready` (readiness: `503` when Redis does not answer; DIS-1)
+Every route below except the health checks and the guest token needs `Authorization: Bearer <token>` (see [Authentication](#authentication-seg-1)); without a valid one the answer is `401`, and `403` when a guest token is used outside its room or for a registered-only action.
 
 - `POST /api/rooms` (`displayName`) - registered users only. Creates a room hosted by the user in the token (a `hostId` in the body is ignored); returns `201` with the room. If the host never connects a socket to it within `DISCONNECT_GRACE_MS` + 5 s, the room is deleted.
 - `POST /api/rooms/:code/guest-token` (`displayName`) - public. For someone without an account who has the code of an existing room: returns `201 { token, playerId, displayName, roomCode, expiresAt }`, a token valid only for that room for `GUEST_TOKEN_TTL_SECONDS`. `404` for an unknown room, `400` for an invalid display name, `503` when `GUEST_TOKEN_SECRET` is not set.
@@ -326,7 +329,8 @@ Rooms hold at most 7 players. Display names are trimmed, 1-32 characters, and un
 - `test/roomConcurrency.socket.test.ts`: over real sockets, back-to-back vote changes from one socket, a full room voting in bursts at once, and `role:select` immediately followed by `battle:start`.
 - `test/wordRace.concurrency.test.ts`: 100 simultaneous correct words, 50 times, give exactly one `won` and 99 `late`; a claim racing the expiry takes effect exactly once.
 - `test/stateStores.contract.test.ts`: the same contract for the in-memory and the Redis implementations of both ports (concurrent joins that provoke real optimistic-lock conflicts and lose nothing, 100 simultaneous claims with one winner, claim against expiry).
-- `test/twoReplicas.socket.test.ts`: two battle-service instances sharing one Redis play a whole battle with the players split between them (broadcasts cross instances, one winner per round, each round end seen once, wins scored once). Its negative control is removing the adapter: the test then fails.
+- `test/twoReplicas.socket.test.ts`: two battle-service instances sharing one Redis play a whole battle with the players split between them (broadcasts cross instances, one winner per round, each round end seen once, wins scored once). Its negative control is removing the adapter: the test then fails. DIS-1 cases in the same file: the replica running the word race timers is killed mid-race and the survivor opens and closes the remaining rounds exactly once (after its clients rejoin, and with nobody rejoining, through the sweep); the replica that finished a battle dies while sending the result and the survivor delivers it once; a kick on one replica cuts off the kicked player's tab on the other.
+- `test/wordRace.resume.test.ts`, `test/matchOutbox.test.ts`, `test/availability.test.ts` (DIS-1): resume and idempotent bonus with two schedulers on one store, the outbox contract for both adapters and its backoff, the readiness probe, the heartbeat settings and a sweep that survives a failing room.
 
 The Redis tests run only when `TEST_REDIS_URL` points to a disposable Redis (`docker run --rm -p 6379:6379 redis:7`, then `TEST_REDIS_URL=redis://localhost:6379 pnpm test`); they touch only their own keys. Without it they are skipped. CI provides one, so they run on every pull request.
 
@@ -342,6 +346,81 @@ Quality scenario REN-1 is documented, with its results and evidence, in [docs/qu
 - **Scale environment.** [`docker-compose.scale.yml`](docker-compose.scale.yml) starts Redis, two replicas with the same CPU and memory limit (`BATTLE_CPUS`, `BATTLE_MEMORY`), nginx as the load balancer on `http://localhost:8088` (`LB_REPLICAS=1` or `2` replicas receive traffic) and a fake Entra ID used only by the load tests.
 - **Load tests.** [`load-tests/`](load-tests/README.md) (Artillery) plays complete 7-player rooms and measures latency from the client: nominal load (140 users, 10 min) and a stress ramp to compare 1 and 2 replicas.
 - **Results.** 140 users with 2 replicas: chat p95 16.9 ms, vote p95 29.7 ms, 0 errors (target p95 <= 300 ms, < 1 % errors). Stress, 0.5 CPU per replica: 1 replica sustains 238 users and 2 replicas 427 (x1.79) at p95 <= 300 ms, with no duplicated or lost scores even when saturated.
+
+## Availability (DIS-1)
+
+Quality scenario DIS-1: one of two battle-service replicas stops abruptly with 20 rooms battling and 140 users; the service must be restored in under 30 s, at least 95 % of the rooms must keep their state and scores, and no finished-match result may be lost or counted twice. The decision behind it is [ADR-06](docs/adr/ADR-06-availability-failover.md) (on top of [ADR-01](docs/adr/ADR-01-estado-en-redis.md) and [ADR-02](docs/adr/ADR-02-balanceador-solo-websocket.md)).
+
+**Tactics**
+
+| Tactic | How |
+|---|---|
+| Active redundancy | Two or more replicas serve the same rooms at the same time; no replica owns a room. State lives in Redis, broadcasts cross replicas through the Socket.IO Redis adapter |
+| Health checks (ping/echo) | Liveness `GET /api/battles/health` (process up) and readiness `GET /api/battles/health/ready` (Redis answers a PING within 800 ms, otherwise `503`). Socket.IO heartbeat every 10 s with a 5 s timeout, so a client behind a dead or hung replica reconnects within 15 s |
+| Load balancer removes the failed replica | nginx locally (passive checks: one failed attempt takes a replica out for 10 s and the request is retried on the other one, `proxy_connect_timeout 2s`; upstream state shared by every worker through a `zone`); the Container Apps ingress with the readiness probe in Azure |
+| State resynchronization | Clients reconnect and repeat `room:join` (idempotent); the replica that receives them loads the room from Redis and resumes its word race timers |
+| Transactional outbox | Finished matches are stored in a Redis outbox before they are sent to users-service and removed only after a 2xx; every replica delivers what is pending |
+
+**How the word race survives its replica.** Rounds are planned with absolute `opensAt` / `closesAt` stored in Redis. `WordRaceScheduler.resume` re-arms an opening timer for every scheduled round and an expiry timer for the open one; every replica runs it on `room:join` of a battling room and on its periodic sweep (`ROOM_SWEEP_INTERVAL_MS`, 15 s). Several replicas may arm the same round: opening, claiming and expiring are atomic Lua scripts, and only the replica whose transition applied broadcasts it, so each round still opens and ends exactly once. Claim and expiry use the Redis server clock, so replicas with skewed clocks agree on every window. The bonus of a won round is idempotent per round id, and `resume` pays any bonus the claiming replica could not pay before dying.
+
+**How results survive.** The replica whose update finished the battle enqueues the match (`{matchoutbox}:pending`, keyed by battle id) and tries to deliver it at once. Every replica's sweep delivers pending matches with exponential backoff (5 s doubling up to 5 min) and re-enqueues the result of any finished room that is neither pending nor delivered (the finisher died before enqueuing it). users-service upserts by battle id, so a duplicate delivery changes nothing. A document refused for good (4xx) stays in the outbox at the maximum backoff and is logged as an error.
+
+**Kick and leave across replicas.** The player's sockets are found through the adapter and removed from the room wherever they are connected; an event from a socket that is no longer in the room channel is refused.
+
+**New settings** (battle-service; all validated at startup)
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SOCKET_PING_INTERVAL_MS` / `SOCKET_PING_TIMEOUT_MS` | `10000` / `5000` | Socket.IO heartbeat (positive whole numbers) |
+| `ROOM_SWEEP_INTERVAL_MS` | `15000` | Housekeeping sweep: abandoned seats, word race resume, outbox delivery |
+| `REDIS_ADAPTER_REQUESTS_TIMEOUT_MS` | `1500` | How long a cross-replica request (`fetchSockets`) waits for the other replicas |
+
+**Run the failover test**
+
+```bash
+cd load-tests && npm install
+node scripts/failover.mjs                   # 20 rooms x 7 users, kills the busiest replica 25 s after the last battle started
+node scripts/failover.mjs --rooms 10 --keep-up   # smaller run, leave the stack up afterwards
+```
+
+It starts [`docker-compose.scale.yml`](docker-compose.scale.yml) plus [`docker-compose.failover.yml`](docker-compose.failover.yml) (users-service with its own throwaway PostgreSQL) as compose project `dis1test` on ports 18088 (load balancer), 13001 and 13002, plays the rooms up to a running battle, snapshots rooms and word races from Redis, `docker kill`s the replica with more connections, measures how long each disconnected client takes to receive room events again, lets every battle finish, compares the rooms with the snapshot and the finished battles with the rows in PostgreSQL, writes `load-tests/reports/failover-*.json` and `.md`, and removes the stack.
+
+**Results**
+
+![DIS-1 scorecard: service restored in 6.2 s at worst, 100 % rooms intact, 0 results lost, 0 counted twice](load-tests/reports/charts/dis1-scorecard.svg)
+
+![Time to restore service per run: the slowest client is back in 3.6-6.2 s, against a 30 s target](load-tests/reports/charts/dis1-recovery.svg)
+
+![Rooms intact per run: 25 % and 0 % before the fixes, 100 % in every run after them](load-tests/reports/charts/dis1-rooms-intact.svg)
+
+The charts are generated from the JSON reports with `node scripts/failover-charts.mjs` (from `load-tests/`); PNG copies for slides are in the same folder.
+
+Local prototype (Windows 11, 8 CPUs, Docker Desktop; 0.5 CPU and 512 MB per replica; nginx; clients with the socket.io-client default reconnection, WebSocket only). Each run: 20 rooms of 7 users (140) battling, the replica with more connections killed with SIGKILL 25 s after the last battle started, with 40-48 word rounds still pending. Reports in [`load-tests/reports/`](load-tests/reports/).
+
+| Run | Clients disconnected / back | Restored: max / p95 / p50 | Rooms intact | Results in PostgreSQL / lost / duplicated |
+|---|---|---|---|---|
+| `140u-run1` | 70 / 70 | 5.9 s / 5.9 s / 3.4 s | 20/20 | 20 / 0 / 0 |
+| `140u-run2` | 70 / 70 | 4.0 s / 3.9 s / 3.3 s | 20/20 | 20 / 0 / 0 |
+| `140u-run3` | 70 / 70 | 6.2 s / 6.1 s / 4.5 s | 20/20 | 20 / 0 / 0 |
+| `140u-run4` | 70 / 70 | 4.4 s / 4.3 s / 3.6 s | 20/20 | 20 / 0 / 0 |
+| `140u-run5` | 70 / 70 | 4.2 s / 4.1 s / 3.4 s | 20/20 | 20 / 0 / 0 |
+| `early-kill-14u` (2 rooms, kill 18 s after the rooms were created) | 7 / 7 | 3.6 s | 2/2 | 2 / 0 / 0 |
+
+Every run met the four measures: service restored in at most 6.2 s (target < 30 s), 100 % of the rooms intact (target >= 95 %), no result lost, no result or score counted twice (persisted dancer scores equal to the rooms', no round ended twice on any client). Restoring takes 3-6 s: the client's first reconnection attempt (1 s +/- 50 %), nginx's 2 s connect timeout on the dead replica for the first requests, then the rejoin.
+
+The runs while the harness was being written found a real defect, now fixed (reports `before-fix-*`): the new-room deadline, which runs 20 s after `POST /api/rooms` on the replica that served it, released the host's seat when no socket was bound at that instant. If a replica died just before, the host was reconnecting: the seat was released, the host's rejoin failed with `ROOM_NOT_WAITING` and the battle ended early with one dancer (`before-fix-failover-smoke`: 0/2 rooms intact). That deadline now only reaps a room the host never used, and the sweep no longer counts a gap in its observations as time without a socket. Two early runs also failed while the test machine stalled (one of them, `before-fix-failover-140u`, with a Redis snapshot taking 12 s instead of under 1 s, 12 clients disconnected before the kill and 5/20 rooms intact); the harness now runs `docker` asynchronously (a synchronous call froze every bot) and reports the load generator's event loop delay, and every seat release is logged with its cause. A run with 210 users (30 rooms, 105 clients failed over, before that fix) also passed: max 9.9 s, 30/30 rooms.
+
+**Azure configuration** (resource group `rg-dancesync`, environment `cae-dancesync`)
+
+- [x] `redis` Container App (`redis:7-alpine` imported into the ACR): internal TCP ingress on 6379, password from a Container Apps secret, 0.25 vCPU / 0.5 GiB, 1 replica, no persistence. Azure Cache for Redis was left out for cost and provisioning time; the trade-off is a single Redis replica (see ADR-06)
+- [x] battle-service with `minReplicas: 2` / `maxReplicas: 2`; `REDIS_URL` (`redis://`, internal traffic only) as a secret, the same for every replica
+- [x] Liveness and readiness HTTP probes on `GET /api/battles/health` (period 5 s; liveness failure threshold 3, readiness 2) and a TCP startup probe
+- [ ] Readiness probe on `GET /api/battles/health/ready` once this branch is deployed (the deployed image does not have that endpoint yet)
+- [x] Ingress without session affinity, WebSocket transport
+- [x] `USERS_SERVICE_URL` pointing to users-service, reachable from battle-service for the outbox to drain
+- [x] `GUEST_TOKEN_SECRET` as a secret (`secretref`) in api-gateway and battle-service
+
+Turn the setup on before a demo and off afterwards with [`scripts/azure-availability.ps1`](scripts/azure-availability.ps1) (`up`, `down`, `status`; `-IncludePostgres` also starts or stops PostgreSQL). With `down`, battle-service and Redis scale to zero, so no compute is billed.
 
 ## Abuse and denial-of-service protection (SEG-3)
 
@@ -368,4 +447,4 @@ Quality scenario SEG-1 is documented, with its tests and evidence, in [docs/qual
 - **Authentication, next steps**: `users-service` still trusts the network (it is only reachable through the gateway and from `battle-service`); making it a resource server and linking `users.external_id` to the Entra ID object id are future work.
 - **Payments**: dedicated payments service behind the gateway; provider to be decided.
 - **Match history UI**: the `GET /api/matches` endpoints exist (HU 21); a per-user history page is a future story.
-- **Horizontal scaling of battle-service, next steps**: the Redis state and the Socket.IO adapter are done (REN-1). Still to do: re-arm the round and battle timers of a replica that stops (DIS-1), report Redis in the health endpoint, and deploy Azure Cache for Redis with two replicas in Azure Container Apps.
+- **Horizontal scaling of battle-service, next steps**: the Redis state and the Socket.IO adapter (REN-1) and the failover of a stopped replica (DIS-1) are done. Still to do: deploy Azure Cache for Redis with two replicas in Azure Container Apps (see the Azure checklist in Availability).
