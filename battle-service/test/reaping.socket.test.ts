@@ -48,6 +48,15 @@ describe("Reaping abandoned rooms", () => {
     assert.deepEqual((await harness.storedRoom(code)).players.map((p) => p.id), ["host"]);
   });
 
+  it("DIS-1: the new-room deadline never releases the host of a room in use, even while the host is reconnecting", async () => {
+    // The host connected through another replica, which then died: no socket is bound right now.
+    const { code, hostId } = await harness.createRoom.execute({ hostId: "busy-host", displayName: "Host" });
+    await seatWithoutSocket(harness, code, "guest", "dancer");
+    harness.handlers().watchNewRoom(code, hostId);
+    await sleep(CREATED_ROOM_GRACE_MS + 150);
+    assert.deepEqual((await harness.storedRoom(code)).players.map((p) => p.id), ["busy-host", "guest"]);
+  });
+
   it("the sweep releases a seat left without a socket for longer than the grace period", async () => {
     const { code } = await harness.createRoom.execute({ hostId: "host", displayName: "Host" });
     const host = await harness.client();

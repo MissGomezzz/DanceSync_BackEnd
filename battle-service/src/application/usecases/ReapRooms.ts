@@ -21,6 +21,11 @@ export class ReapRooms {
     return found;
   }
 
+  /** One stored room, or undefined when it does not exist. */
+  async find(code: string): Promise<Room | undefined> {
+    return this.rooms.findByCode(code);
+  }
+
   /** Deletes the room when it has no players left. Returns true when it was deleted. */
   async deleteIfEmpty(code: string): Promise<boolean> {
     try {

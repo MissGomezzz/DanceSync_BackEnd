@@ -347,7 +347,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     const timer = setTimeout(() => {
       graceTimers.delete(key);
       graceDeadlines.delete(key);
-      void releaseSeatIfAbandoned(roomCode, playerId);
+      void releaseSeatIfAbandoned(roomCode, playerId, `no socket ${delayMs} ms after a disconnect`);
     }, delayMs);
     timer.unref();
     graceTimers.set(key, timer);
@@ -387,9 +387,11 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
     return left;
   }
 
-  async function releaseSeatIfAbandoned(roomCode: string, playerId: string): Promise<void> {
+  async function releaseSeatIfAbandoned(roomCode: string, playerId: string, why: string): Promise<void> {
     try {
       if (await isBound(roomCode, playerId)) return; // Player is back.
+      // Traceable (DIS-1): a seat released during a failover means a client did not get back in time.
+      console.info(`Seat of ${playerId} in room ${roomCode} released: ${why}`);
       await leaveRoom(roomCode, playerId);
     } catch (error) {
       // The player may have left explicitly or the room may already be gone.
@@ -404,16 +406,35 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
 
   function watchNewRoom(roomCode: string, hostId: string): void {
     const key = seatKey(roomCode, hostId);
-    unboundSince.set(key, Date.now());
     clearTimeout(newRoomTimers.get(key));
     const timer = setTimeout(() => {
       newRoomTimers.delete(key);
       // A pending disconnect grace means the host did connect: that timer decides.
       if (graceTimers.has(key)) return;
-      void releaseSeatIfAbandoned(roomCode, hostId);
+      void releaseHostOfUnusedRoom(roomCode, hostId);
     }, createdRoomGraceMs);
     timer.unref();
     newRoomTimers.set(key, timer);
+  }
+
+  /**
+   * The new-room deadline only reaps a room nobody used: the host still alone
+   * in the lobby. A room that others joined (or a battle) proves the host did
+   * connect; from then on the seat follows the grace period and the sweep,
+   * which need it unbound for disconnectGraceMs. DIS-1: this timer lives on the
+   * replica that served POST /api/rooms, so it may fire while the host is
+   * reconnecting after a failover, and a single "not bound right now" must not
+   * release a seat in a running battle.
+   */
+  async function releaseHostOfUnusedRoom(roomCode: string, hostId: string): Promise<void> {
+    try {
+      const room = await deps.reapRooms.find(roomCode);
+      if (!room || room.status !== "waiting" || room.players.some((p) => p.id !== hostId)) return;
+    } catch (error) {
+      console.error("Error reading a new room before reaping it", error);
+      return;
+    }
+    await releaseSeatIfAbandoned(roomCode, hostId, "the host never connected after creating the room");
   }
 
   /**
@@ -441,6 +462,9 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         await sweepRoom(room, now);
       } catch (error) {
         console.error(`Error sweeping room ${room.code}`, error);
+        // Its seats could not be observed: a gap in the observations must never
+        // count as time without a socket (DIS-1, e.g. during a failover).
+        for (const player of room.players) unboundSince.delete(seatKey(room.code, player.id));
       }
     }
     for (const key of armedBefore) if (!listed.has(key)) forgetRoomTimers(key);
@@ -475,7 +499,7 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
         unboundSince.set(key, now);
       } else if (now - since >= deps.disconnectGraceMs) {
         unboundSince.delete(key);
-        await releaseSeatIfAbandoned(room.code, player.id);
+        await releaseSeatIfAbandoned(room.code, player.id, `unbound for ${now - since} ms (sweep)`);
       }
     }
   }
