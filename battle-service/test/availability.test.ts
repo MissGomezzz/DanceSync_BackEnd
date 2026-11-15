@@ -70,11 +70,11 @@ describe("Readiness probe GET /api/battles/health/ready (DIS-1)", () => {
 
   it("pings the real stores: in memory always, Redis when TEST_REDIS_URL is set", async () => {
     const memory = createStateStores(loadRedisConfig({}));
-    await memory.ping();
+    await assert.doesNotReject(memory.ping());
     if (!process.env.TEST_REDIS_URL) return;
     const redis = createStateStores(loadRedisConfig({ REDIS_URL: process.env.TEST_REDIS_URL }));
     try {
-      await redis.ping();
+      await assert.doesNotReject(redis.ping());
     } finally {
       await redis.close();
     }
