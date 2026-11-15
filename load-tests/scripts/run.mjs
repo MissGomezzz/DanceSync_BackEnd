@@ -1,4 +1,4 @@
-// Uso: node scripts/run.mjs <smoke|nominal|stress> [--target URL] [--label etiqueta]
+// Uso: node scripts/run.mjs <smoke|nominal|stress|abuse|abuse-smoke> [--target URL] [--label etiqueta]
 // Ejecuta Artillery, mide los recursos de la máquina y de los contenedores, guarda el JSON en results/
 // e imprime el resumen con el veredicto. Solo permite UNA prueba a la vez: dos generadores en la misma
 // máquina se disputan CPU y red, y los resultados dejan de valer.
@@ -8,8 +8,8 @@ import { startMonitor } from "./monitor.mjs";
 
 const args = process.argv.slice(2);
 const scenario = args[0];
-if (!["smoke", "nominal", "stress"].includes(scenario)) {
-  console.error("Uso: node scripts/run.mjs <smoke|nominal|stress> [--target URL] [--label etiqueta]");
+if (!["smoke", "nominal", "stress", "abuse", "abuse-smoke"].includes(scenario)) {
+  console.error("Uso: node scripts/run.mjs <smoke|nominal|stress|abuse|abuse-smoke> [--target URL] [--label etiqueta]");
   process.exit(2);
 }
 const opt = (name, fallback) => {

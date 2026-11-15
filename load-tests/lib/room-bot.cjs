@@ -61,9 +61,24 @@ const EXPECTED_CODES = new Set([
   "WORD_RACE_NOT_ACTIVE",
 ]);
 
+/** SEG-3: ventana del ataque (la fijan los clientes abusivos). Fuera de una prueba de abuso queda en 0. */
+let ATTACK_FROM = 0;
+let ATTACK_UNTIL = 0;
+const attackActive = () => {
+  const now = Date.now();
+  return ATTACK_FROM > 0 && now >= ATTACK_FROM && now <= ATTACK_UNTIL;
+};
+const MEASURED_DURING_ATTACK = new Set(["chat_e2e_ms", "vote_e2e_ms", "ack_ms"]);
+
 function makeMetrics(events) {
   return {
-    hist: (name, value) => events.emit("histogram", `dancesync.${name}`, value),
+    hist: (name, value) => {
+      events.emit("histogram", `dancesync.${name}`, value);
+      // Las latencias de los usuarios normales mientras dura el ataque, aparte, para compararlas (SEG-3).
+      if (MEASURED_DURING_ATTACK.has(name) && attackActive()) {
+        events.emit("histogram", `dancesync.attack_window.${name}`, value);
+      }
+    },
     count: (name, n = 1) => events.emit("counter", `dancesync.${name}`, n),
   };
 }
@@ -116,6 +131,8 @@ function connect(room, bot) {
       reconnection: false,
       timeout: 10000,
       auth: bot.token ? { token: bot.token } : undefined,
+      // Cada sala sale de su propia dirección, como detrás de un proxy de confianza (SEG-3).
+      extraHeaders: room.ip ? { "x-forwarded-for": room.ip } : undefined,
     });
     bot.socket = socket;
     let settled = false;
@@ -242,6 +259,7 @@ async function createRoom(room, host) {
       headers: {
         "Content-Type": "application/json",
         ...(host.token ? { Authorization: `Bearer ${host.token}` } : {}),
+        ...(room.ip ? { "X-Forwarded-For": room.ip } : {}),
       },
       body: JSON.stringify({ hostId: host.id, displayName: host.name }),
     });
@@ -265,7 +283,7 @@ async function getGuestToken(room, bot) {
   try {
     const res = await fetch(`${BASE}/api/rooms/${room.code}/guest-token`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(room.ip ? { "X-Forwarded-For": room.ip } : {}) },
       body: JSON.stringify({ displayName: bot.name }),
     });
     room.m.hist("guest_token_ms", performance.now() - t0);
@@ -342,8 +360,7 @@ function watchGeneratorHealth(events) {
   }, 5000).unref();
 }
 
-/** Función de flujo de Artillery: una sala completa. */
-async function runRoomAsync(context, events) {
+function init(context, events) {
   if (END_AT === 0) {
     const v = context.vars || {};
     if (v.target) BASE = String(v.target).replace(/\/$/, "");
@@ -353,8 +370,17 @@ async function runRoomAsync(context, events) {
     END_AT = Date.now() + TOTAL_S * 1000;
     watchGeneratorHealth(events);
   }
+}
+
+/** Dirección simulada de la sala n, en el rango reservado para pruebas de rendimiento (RFC 2544). */
+const roomAddress = (n) => `198.18.${Math.floor(n / 250)}.${(n % 250) + 1}`;
+
+/** Función de flujo de Artillery: una sala completa. */
+async function runRoomAsync(context, events) {
+  init(context, events);
   const n = roomSeq++;
   const room = {
+    ip: roomAddress(n),
     code: "",
     m: makeMetrics(events),
     closing: false,
@@ -428,4 +454,174 @@ function runRoom(context, events, done) {
   );
 }
 
-module.exports = { runRoom };
+/* ------------------------------------------------------------------------------------------
+ * SEG-3: cliente abusivo.
+ *
+ * Cada uno sale de su propia dirección (198.19.255.x), crea su sala, entra y envía
+ * `abuseEventsPerSecond` eventos de chat por segundo. Cuando el servidor lo bloquea y cierra
+ * la conexión, insiste: intenta reconectarse cada segundo con el mismo token y, una vez, con
+ * un token de invitado nuevo desde la misma dirección. Si un intento entra (el bloqueo
+ * terminó), vuelve a inundar. Así hasta `abuseDurationS`.
+ *
+ * Métricas (no se mezclan con las de los usuarios normales):
+ *   dancesync.abuse.first_limited_ms   inicio de la inundación -> primer rate:limited
+ *   dancesync.abuse.blocked_ms         inicio de la inundación -> rate:blocked
+ *   dancesync.abuse.events_sent        eventos que intentó enviar
+ *   dancesync.abuse.blocks             veces que fue bloqueado
+ *   dancesync.abuse.reconnect_refused  reconexiones rechazadas (BLOCKED) / reconnect_accepted
+ *   dancesync.abuse.ip_block_held      el token nuevo desde la misma dirección también fue rechazado
+ *   dancesync.abuse.ip_block_failed    ... o no lo fue (fallo)
+ *   dancesync.abuse.setup_failures     no pudo ni empezar (no cuenta como bloqueo)
+ * ---------------------------------------------------------------------------------------- */
+let abuserSeq = 0;
+
+function abuseMetrics(events) {
+  return {
+    hist: (name, value) => events.emit("histogram", `dancesync.abuse.${name}`, value),
+    count: (name, n = 1) => events.emit("counter", `dancesync.abuse.${name}`, n),
+  };
+}
+
+/** Abre un socket y resuelve "connected", o el mensaje con que se rechazó el handshake. */
+function openSocket(token, ip) {
+  return new Promise((resolve) => {
+    const socket = io(BASE, {
+      path: "/socket.io",
+      transports: TRANSPORTS,
+      reconnection: false,
+      timeout: 10000,
+      auth: token ? { token } : undefined,
+      extraHeaders: { "x-forwarded-for": ip },
+    });
+    socket.on("connect", () => resolve({ socket, refused: null }));
+    socket.on("connect_error", (error) => {
+      socket.close();
+      resolve({ socket: null, refused: error?.message ?? "connect_error" });
+    });
+  });
+}
+
+async function postJson(path, body, ip, token) {
+  const res = await fetch(`${BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Forwarded-For": ip,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: res.status < 300 ? await res.json() : null };
+}
+
+/** Inunda hasta que el servidor cierre la conexión o termine el ataque. Resuelve true si lo bloquearon. */
+function flood(socket, roomCode, m, ratePerSecond, until) {
+  return new Promise((resolve) => {
+    const started = performance.now();
+    let limitedSeen = false;
+    let blocked = false;
+    socket.on("rate:limited", () => {
+      if (limitedSeen) return;
+      limitedSeen = true;
+      m.hist("first_limited_ms", performance.now() - started);
+    });
+    socket.on("rate:blocked", () => {
+      blocked = true;
+      m.hist("blocked_ms", performance.now() - started);
+      m.count("blocks");
+    });
+    const perTick = Math.max(1, Math.round(ratePerSecond / 100)); // un tick cada 10 ms
+    let i = 0;
+    const timer = setInterval(() => {
+      if (!socket.connected || Date.now() >= until) return;
+      for (let k = 0; k < perTick; k += 1) {
+        socket.emit("chat:message", { roomCode, content: `spam ${i++}` }, () => {});
+        m.count("events_sent");
+      }
+    }, 10);
+    const finish = () => {
+      clearInterval(timer);
+      resolve(blocked);
+    };
+    socket.on("disconnect", finish);
+    const stopAt = setTimeout(() => {
+      socket.disconnect();
+    }, Math.max(0, until - Date.now()));
+    socket.on("disconnect", () => clearTimeout(stopAt));
+  });
+}
+
+async function runAbuserAsync(context, events) {
+  init(context, events);
+  const v = context.vars || {};
+  const ratePerSecond = Number(v.abuseEventsPerSecond ?? 200);
+  const durationS = Number(v.abuseDurationS ?? 120);
+  const k = abuserSeq++;
+  const m = abuseMetrics(events);
+  const ip = `198.19.255.${k + 1}`;
+  const id = `A${RUN_ID}x${k}`;
+  const until = Date.now() + durationS * 1000;
+  if (ATTACK_FROM === 0 || Date.now() > ATTACK_UNTIL) {
+    ATTACK_FROM = Date.now();
+    ATTACK_UNTIL = until;
+  } else {
+    ATTACK_UNTIL = Math.max(ATTACK_UNTIL, until);
+  }
+
+  try {
+    const token = AUTH_MODE === "fake" ? mintEntraToken({ oid: id, name: `Abuser ${k}` }) : "";
+    const created = await postJson("/api/rooms", { hostId: id, displayName: `Abuser ${k}` }, ip, token);
+    if (created.status !== 201) throw new Error(`crear sala: HTTP ${created.status}`);
+    const roomCode = created.body.code;
+
+    let triedFreshGuest = false;
+    while (Date.now() < until) {
+      const { socket, refused } = await openSocket(token, ip);
+      if (!socket) {
+        if (refused === "BLOCKED") m.count("reconnect_refused");
+        else m.count("reconnect_other_error");
+        if (!triedFreshGuest && refused === "BLOCKED") {
+          // ¿Y con una identidad nueva desde la misma dirección? (el bloqueo por IP debe sostenerse)
+          triedFreshGuest = true;
+          const guest = await postJson(`/api/rooms/${roomCode}/guest-token`, { displayName: "Otro" }, ip);
+          if (guest.status === 201) {
+            const fresh = await openSocket(guest.body.token, ip);
+            if (fresh.socket) {
+              m.count("ip_block_failed");
+              fresh.socket.disconnect();
+            } else m.count(fresh.refused === "BLOCKED" ? "ip_block_held" : "ip_block_other");
+          } else m.count("ip_block_held"); // también rechazado antes de llegar al socket (p. ej. 429)
+        }
+        await sleep(1000);
+        continue;
+      }
+      m.count("reconnect_accepted");
+      await new Promise((resolve) => socket.emit("room:join", { roomCode, displayName: `Abuser ${k}` }, resolve));
+      await flood(socket, roomCode, m, ratePerSecond, until);
+      socket.disconnect();
+    }
+  } catch (error) {
+    m.count("setup_failures");
+    console.error(`[abusivo ${k}] ${error.message}`);
+  }
+}
+
+function runAbuser(context, events, done) {
+  runAbuserAsync(context, events).then(
+    () => done(),
+    (error) => done(error),
+  );
+}
+
+/**
+ * SEG-3: una sola función de flujo para salas normales y clientes abusivos. Las primeras
+ * `rooms` llegadas son salas y las siguientes, abusivos. Funciona porque las fases con
+ * arrivalCount corren completas en un solo proceso de Artillery.
+ */
+let mixedSeq = 0;
+function runMixed(context, events, done) {
+  const rooms = Number(context.vars?.rooms ?? 20);
+  return mixedSeq++ < rooms ? runRoom(context, events, done) : runAbuser(context, events, done);
+}
+
+module.exports = { runRoom, runAbuser, runMixed };

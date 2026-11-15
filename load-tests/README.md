@@ -121,3 +121,44 @@ Las credenciales del compose son de prueba y no deben usarse fuera de una máqui
   latencias incluyen el retraso del propio generador y no son del servidor.
 - `compare.mjs` rechaza la comparación si las dos pruebas se solaparon en el tiempo y avisa si el número de réplicas o el
   límite de CPU no corresponde.
+
+## Protección ante abuso (SEG-3)
+
+`scenarios/abuse.yml` reproduce el escenario SEG-3: las 20 salas de la carga nominal (140 usuarios) y, con el
+tráfico ya sostenido (a los 240 s), 5 clientes abusivos que envían 200 eventos por segundo durante 5 minutos.
+Cada abusivo crea su sala, inunda el chat y, cuando el servidor lo bloquea y cierra la conexión, insiste: intenta
+reconectarse cada segundo con el mismo token y una vez con un token de invitado nuevo desde la misma dirección.
+`abuse-smoke.yml` es la versión corta (3 salas, 2 abusivos, ~2 min) para comprobar el entorno.
+
+**Direcciones simuladas.** El bloqueo de SEG-3 es por identidad y por dirección IP, y todos los bots salen de la
+misma máquina. Por eso cada sala envía `X-Forwarded-For` con una dirección propia (rango de pruebas 198.18.0.0/15,
+RFC 2544) y cada abusivo la suya (198.19.255.x). En `docker-compose.scale.yml` las réplicas confían en 2 saltos
+(`TRUSTED_PROXY_HOPS=2`): nginx y, antes, el bot haciendo de ingreso de la plataforma. Sin eso, el bloqueo de un
+abusivo caería sobre los 140 usuarios normales.
+
+**Qué mide** (además de lo de REN-1):
+
+| Métrica | Definición |
+|---|---|
+| `dancesync.abuse.first_limited_ms` | inicio de la inundación -> primer `rate:limited` (criterio: < 1 s) |
+| `dancesync.abuse.blocked_ms` | inicio de la inundación -> `rate:blocked` |
+| `dancesync.abuse.reconnect_refused` | reconexiones rechazadas con `BLOCKED` mientras dura el bloqueo |
+| `dancesync.abuse.ip_block_held` | un token nuevo desde la misma dirección también fue rechazado |
+| `dancesync.attack_window.*` | latencias de los usuarios normales solo mientras dura el ataque |
+
+Las métricas de los abusivos no se mezclan con las de los usuarios normales: sus eventos rechazados no cuentan
+como errores.
+
+**Cómo correrla** (en el entorno de escala, con 2 réplicas, una prueba a la vez):
+
+```sh
+node scripts/run.mjs abuse-smoke --target http://localhost:8088 --label humo-abuso
+node scripts/run.mjs nominal --target http://localhost:8088 --label base-seg3-a
+node scripts/run.mjs nominal --target http://localhost:8088 --label base-seg3-b
+node scripts/run.mjs abuse   --target http://localhost:8088 --label ataque
+node scripts/abuse-compare.mjs results/nominal-base-seg3-a-<fecha>.json results/abuse-ataque-<fecha>.json results/nominal-base-seg3-b-<fecha>.json
+```
+
+`abuse-compare.mjs` compara el p95 de los usuarios normales sin ataque con su p95 durante el ataque (criterio:
+no aumenta más de un 5 %). Con una segunda línea base muestra también cuánto varía el p95 entre dos corridas sin
+ataque: con p95 de unos 20 ms, un 5 % es 1 ms, del orden del ruido normal de la medición.

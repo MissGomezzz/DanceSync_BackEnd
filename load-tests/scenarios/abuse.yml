@@ -1,0 +1,27 @@
+# SEG-3: 140 usuarios normales (20 salas de 7, como REN-1) y, con el tráfico ya sostenido,
+# 5 clientes abusivos que envían 200 eventos por segundo durante 5 minutos.
+#   0-60 s     llegan las 20 salas
+#   60-240 s   tráfico normal sostenido
+#   240-540 s  ataque (los abusivos insisten: se reconectan cada segundo al ser bloqueados)
+#   hasta 660 s tráfico normal; las salas terminan su batalla en curso
+# Comparar con una corrida de `nominal` en el mismo entorno: node scripts/abuse-compare.mjs.
+# Todas las fases usan arrivalCount o pause: Artillery las corre en un solo proceso, que es lo
+# que permite a runMixed saber que las primeras 20 llegadas son salas y el resto, abusivos.
+config:
+  target: "http://localhost:8080"
+  processor: "../lib/room-bot.cjs"
+  phases:
+    - { name: "salas", duration: 60, arrivalCount: 20 }
+    - { name: "trafico-normal", pause: 180 }
+    - { name: "ataque", duration: 5, arrivalCount: 5 }
+  variables:
+    totalS: [660]
+    roomSize: [7]
+    eventEveryMs: [2000]
+    rooms: [20]
+    abuseEventsPerSecond: [200]
+    abuseDurationS: [300]
+scenarios:
+  - name: "salas normales y clientes abusivos"
+    flow:
+      - function: "runMixed"

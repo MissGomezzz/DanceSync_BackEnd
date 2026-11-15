@@ -40,6 +40,12 @@ console.log(row("palabra ganadora -> fin de ronda", sums["dancesync.word_e2e_ms"
 console.log(row("acuse de cualquier evento", sums["dancesync.ack_ms"]));
 console.log(row("HTTP crear sala", sums["dancesync.http_create_room_ms"]));
 console.log(row("HTTP token de invitado", sums["dancesync.guest_token_ms"]));
+if (sums["dancesync.attack_window.chat_e2e_ms"]) {
+  console.log("Usuarios normales durante el ataque (SEG-3):");
+  console.log(row("  chat", sums["dancesync.attack_window.chat_e2e_ms"]));
+  console.log(row("  voto", sums["dancesync.attack_window.vote_e2e_ms"]));
+  console.log(row("  acuse", sums["dancesync.attack_window.ack_ms"]));
+}
 
 const lag = sums["dancesync.generator_loop_lag_ms"];
 if (lag) {
@@ -62,6 +68,22 @@ for (const [name, key] of [["chat", "chat_e2e_ms"], ["voto", "vote_e2e_ms"]]) {
 checks.push([`errores < ${ERROR_LIMIT * 100} %`, sent > 0 && errorRate < ERROR_LIMIT, `${(errorRate * 100).toFixed(2)} %`]);
 checks.push(["un único ganador por ronda", c("duplicate_round_end") === 0 && c("winner_mismatch") === 0, ""]);
 checks.push(["sin puntajes duplicados ni perdidos", c("score_mismatch") === 0, ""]);
+
+// SEG-3: clientes abusivos (sus métricas no se mezclan con las de los usuarios normales).
+const a = (name) => counters[`dancesync.abuse.${name}`] ?? 0;
+if (a("events_sent") > 0 || a("setup_failures") > 0) {
+  const firstLimited = sums["dancesync.abuse.first_limited_ms"];
+  const blockedAt = sums["dancesync.abuse.blocked_ms"];
+  console.log("\nClientes abusivos (SEG-3):");
+  console.log(row("inundación -> primer rate:limited", firstLimited));
+  console.log(row("inundación -> bloqueo", blockedAt));
+  console.log(`Eventos que intentaron enviar: ${a("events_sent")} | bloqueos: ${a("blocks")} | conexiones aceptadas: ${a("reconnect_accepted")}`);
+  console.log(`Reconexiones rechazadas por bloqueo: ${a("reconnect_refused")} | otros errores de conexión: ${a("reconnect_other_error")} | sin poder empezar: ${a("setup_failures")}`);
+  console.log(`Identidad nueva desde la misma dirección: rechazada ${a("ip_block_held")} | aceptada ${a("ip_block_failed")} | otro ${a("ip_block_other")}`);
+  checks.push(["abusivo limitado en menos de 1 s", Boolean(firstLimited) && firstLimited.max < 1000, firstLimited ? `máx ${fmt(firstLimited.max)} ms` : "sin datos"]);
+  checks.push(["cada conexión abusiva termina bloqueada", a("blocks") > 0 && a("blocks") >= a("reconnect_accepted") - 5 && a("setup_failures") === 0, `${a("blocks")} de ${a("reconnect_accepted")}`]);
+  checks.push(["el bloqueo se sostiene (identidad y dirección)", a("reconnect_refused") > 0 && a("ip_block_failed") === 0 && a("ip_block_held") > 0, ""]);
+}
 
 console.log("\nVeredicto:");
 for (const [label, ok, detail] of checks) console.log(`  ${ok ? "PASA " : "FALLA"}  ${label} ${detail ? `(${detail})` : ""}`);
