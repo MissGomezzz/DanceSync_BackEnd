@@ -84,6 +84,39 @@ dancesync:
     cors:
       allowed-origin: ${FRONTEND_ORIGIN:http://localhost:5173}
 
+  # SEG-3, protection against abuse and denial of service: a token bucket per
+  # client address and kind of request, answered 429 with Retry-After when empty.
+  # It runs before authentication. With REDIS_URL the buckets are shared by every
+  # gateway instance; without it they live in this instance's memory. If Redis
+  # fails, requests go through (the limiter never takes the gateway down).
+  rate-limit:
+    enabled: ${RATE_LIMIT_ENABLED:true}
+    # Proxies in front of the gateway (platform ingress, load balancer) whose
+    # X-Forwarded-For entry is trusted to find the client's address. 0 = ignore
+    # the header, which a client can forge.
+    trusted-proxy-hops: ${TRUSTED_PROXY_HOPS:0}
+    redis-url: ${REDIS_URL:}
+    # POST /api/rooms: nobody creates more than a few rooms a minute.
+    room-create:
+      per-second: ${RATE_LIMIT_ROOM_CREATE_PER_SECOND:1}
+      burst: ${RATE_LIMIT_ROOM_CREATE_BURST:10}
+    # POST /api/rooms/{code}/guest-token: a group joining from one network at once.
+    guest-token:
+      per-second: ${RATE_LIMIT_GUEST_TOKEN_PER_SECOND:5}
+      burst: ${RATE_LIMIT_GUEST_TOKEN_BURST:20}
+    # Opening a Socket.IO connection, including the reconnection of a whole room.
+    socket-handshake:
+      per-second: ${RATE_LIMIT_SOCKET_HANDSHAKE_PER_SECOND:5}
+      burst: ${RATE_LIMIT_SOCKET_HANDSHAKE_BURST:30}
+    # Requests of an open long-polling session (fallback transport).
+    socket-polling:
+      per-second: ${RATE_LIMIT_SOCKET_POLLING_PER_SECOND:20}
+      burst: ${RATE_LIMIT_SOCKET_POLLING_BURST:40}
+    # Any other request (room state, match history, leave beacon...).
+    other:
+      per-second: ${RATE_LIMIT_OTHER_PER_SECOND:20}
+      burst: ${RATE_LIMIT_OTHER_BURST:40}
+
 management:
   endpoints:
     web:
