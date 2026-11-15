@@ -159,6 +159,11 @@ node scripts/run.mjs abuse   --target http://localhost:8088 --label ataque
 node scripts/abuse-compare.mjs results/nominal-base-seg3-a-<fecha>.json results/abuse-ataque-<fecha>.json results/nominal-base-seg3-b-<fecha>.json
 ```
 
-`abuse-compare.mjs` compara el p95 de los usuarios normales sin ataque con su p95 durante el ataque (criterio:
-no aumenta más de un 5 %). Con una segunda línea base muestra también cuánto varía el p95 entre dos corridas sin
-ataque: con p95 de unos 20 ms, un 5 % es 1 ms, del orden del ruido normal de la medición.
+`abuse-compare.mjs` compara el p95 de los usuarios normales en **el mismo tramo de cada prueba**: del segundo 245 al
+540, que en `abuse` cae dentro del ataque (`windowFromS`/`windowToS` en los escenarios; el bot registra ese tramo
+aparte como `dancesync.window.*` en toda corrida). Comparar el ataque contra la corrida completa estaría sesgado:
+el inicio de una corrida, con pocas salas, tiene latencias más bajas que su parte central. Criterio: el p95 no
+aumenta más de un 5 %. Con una segunda línea base muestra también cuánto varía el p95 entre dos corridas sin ataque
+(el ruido de la medición) y compara contra la peor de las dos bases. Con reportes anteriores, sin
+`dancesync.window.*`, estima el p95 del tramo con los resúmenes de 10 s de Artillery, con el mismo método para los
+tres archivos (`--from` y `--to` cambian el tramo).

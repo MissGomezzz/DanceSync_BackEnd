@@ -40,11 +40,11 @@ console.log(row("palabra ganadora -> fin de ronda", sums["dancesync.word_e2e_ms"
 console.log(row("acuse de cualquier evento", sums["dancesync.ack_ms"]));
 console.log(row("HTTP crear sala", sums["dancesync.http_create_room_ms"]));
 console.log(row("HTTP token de invitado", sums["dancesync.guest_token_ms"]));
-if (sums["dancesync.attack_window.chat_e2e_ms"]) {
-  console.log("Usuarios normales durante el ataque (SEG-3):");
-  console.log(row("  chat", sums["dancesync.attack_window.chat_e2e_ms"]));
-  console.log(row("  voto", sums["dancesync.attack_window.vote_e2e_ms"]));
-  console.log(row("  acuse", sums["dancesync.attack_window.ack_ms"]));
+if (sums["dancesync.window.chat_e2e_ms"]) {
+  console.log("Usuarios normales en la ventana de comparación (SEG-3; con ataque, la ventana cae dentro del ataque):");
+  console.log(row("  chat", sums["dancesync.window.chat_e2e_ms"]));
+  console.log(row("  voto", sums["dancesync.window.vote_e2e_ms"]));
+  console.log(row("  acuse", sums["dancesync.window.ack_ms"]));
 }
 
 const lag = sums["dancesync.generator_loop_lag_ms"];
@@ -77,6 +77,8 @@ if (a("events_sent") > 0 || a("setup_failures") > 0) {
   console.log("\nClientes abusivos (SEG-3):");
   console.log(row("inundación -> primer rate:limited", firstLimited));
   console.log(row("inundación -> bloqueo", blockedAt));
+  const startedAt = sums["dancesync.abuse.started_at_s"];
+  if (startedAt) console.log(`Los abusivos empezaron entre el segundo ${fmt(startedAt.min)} y el ${fmt(startedAt.max)} de la prueba.`);
   console.log(`Eventos que intentaron enviar: ${a("events_sent")} | bloqueos: ${a("blocks")} | conexiones aceptadas: ${a("reconnect_accepted")}`);
   console.log(`Reconexiones rechazadas por bloqueo: ${a("reconnect_refused")} | otros errores de conexión: ${a("reconnect_other_error")} | sin poder empezar: ${a("setup_failures")}`);
   console.log(`Identidad nueva desde la misma dirección: rechazada ${a("ip_block_held")} | aceptada ${a("ip_block_failed")} | otro ${a("ip_block_other")}`);

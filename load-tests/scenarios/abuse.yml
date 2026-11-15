@@ -4,7 +4,8 @@
 #   60-240 s   tráfico normal sostenido
 #   240-540 s  ataque (los abusivos insisten: se reconectan cada segundo al ser bloqueados)
 #   hasta 660 s tráfico normal; las salas terminan su batalla en curso
-# Comparar con una corrida de `nominal` en el mismo entorno: node scripts/abuse-compare.mjs.
+# Comparar con dos corridas de `nominal` en el mismo entorno: node scripts/abuse-compare.mjs.
+# El tramo 245-540 s (windowFromS/windowToS) cae dentro del ataque y se mide igual en `nominal`.
 # Todas las fases usan arrivalCount o pause: Artillery las corre en un solo proceso, que es lo
 # que permite a runMixed saber que las primeras 20 llegadas son salas y el resto, abusivos.
 config:
@@ -18,6 +19,9 @@ config:
     totalS: [660]
     roomSize: [7]
     eventEveryMs: [2000]
+    # SEG-3: tramo de la prueba (en segundos) cuyas latencias se registran aparte para comparar con y sin ataque.
+    windowFromS: [245]
+    windowToS: [540]
     rooms: [20]
     abuseEventsPerSecond: [200]
     abuseDurationS: [300]

@@ -11,6 +11,9 @@ config:
     totalS: [60]
     roomSize: [7]
     eventEveryMs: [2000]
+    # SEG-3: tramo de la prueba (en segundos) cuyas latencias se registran aparte para comparar con y sin ataque.
+    windowFromS: [20]
+    windowToS: [55]
     rooms: [3]
     abuseEventsPerSecond: [200]
     abuseDurationS: [45]

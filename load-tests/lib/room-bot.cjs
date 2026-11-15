@@ -61,22 +61,29 @@ const EXPECTED_CODES = new Set([
   "WORD_RACE_NOT_ACTIVE",
 ]);
 
-/** SEG-3: ventana del ataque (la fijan los clientes abusivos). Fuera de una prueba de abuso queda en 0. */
-let ATTACK_FROM = 0;
-let ATTACK_UNTIL = 0;
-const attackActive = () => {
-  const now = Date.now();
-  return ATTACK_FROM > 0 && now >= ATTACK_FROM && now <= ATTACK_UNTIL;
+/**
+ * SEG-3: ventana de comparación. Toda corrida (con o sin ataque) registra aparte las latencias de los
+ * usuarios normales entre WINDOW_FROM_S y WINDOW_TO_S segundos desde su inicio. En `abuse` esa ventana
+ * cae dentro del ataque; en `nominal` es el mismo tramo de la prueba sin ataque. Así se compara el mismo
+ * momento de la prueba (todas las salas ya en batalla), no el ataque contra la corrida completa.
+ */
+let TEST_START = 0;
+let WINDOW_FROM_S = 245;
+let WINDOW_TO_S = 540;
+const inWindow = () => {
+  if (TEST_START === 0) return false;
+  const elapsedS = (Date.now() - TEST_START) / 1000;
+  return elapsedS >= WINDOW_FROM_S && elapsedS <= WINDOW_TO_S;
 };
-const MEASURED_DURING_ATTACK = new Set(["chat_e2e_ms", "vote_e2e_ms", "ack_ms"]);
+const MEASURED_IN_WINDOW = new Set(["chat_e2e_ms", "vote_e2e_ms", "ack_ms"]);
 
 function makeMetrics(events) {
   return {
     hist: (name, value) => {
       events.emit("histogram", `dancesync.${name}`, value);
-      // Las latencias de los usuarios normales mientras dura el ataque, aparte, para compararlas (SEG-3).
-      if (MEASURED_DURING_ATTACK.has(name) && attackActive()) {
-        events.emit("histogram", `dancesync.attack_window.${name}`, value);
+      // Las latencias de los usuarios normales en la ventana de comparación, aparte (SEG-3).
+      if (MEASURED_IN_WINDOW.has(name) && inWindow()) {
+        events.emit("histogram", `dancesync.window.${name}`, value);
       }
     },
     count: (name, n = 1) => events.emit("counter", `dancesync.${name}`, n),
@@ -368,6 +375,9 @@ function init(context, events) {
     ROOM_SIZE = Math.min(Number(v.roomSize ?? process.env.ROOM_SIZE ?? ROOM_SIZE), 7);
     EVENT_EVERY_MS = Number(v.eventEveryMs ?? process.env.EVENT_EVERY_MS ?? EVENT_EVERY_MS);
     END_AT = Date.now() + TOTAL_S * 1000;
+    TEST_START = Date.now();
+    WINDOW_FROM_S = Number(v.windowFromS ?? WINDOW_FROM_S);
+    WINDOW_TO_S = Number(v.windowToS ?? WINDOW_TO_S);
     watchGeneratorHealth(events);
   }
 }
@@ -472,6 +482,8 @@ function runRoom(context, events, done) {
  *   dancesync.abuse.ip_block_held      el token nuevo desde la misma dirección también fue rechazado
  *   dancesync.abuse.ip_block_failed    ... o no lo fue (fallo)
  *   dancesync.abuse.setup_failures     no pudo ni empezar (no cuenta como bloqueo)
+ *   dancesync.abuse.started_at_s       segundo de la prueba en que empezó cada abusivo (para comprobar
+ *                                      que la ventana de comparación cae dentro del ataque)
  * ---------------------------------------------------------------------------------------- */
 let abuserSeq = 0;
 
@@ -559,14 +571,9 @@ async function runAbuserAsync(context, events) {
   const k = abuserSeq++;
   const m = abuseMetrics(events);
   const ip = `198.19.255.${k + 1}`;
+  m.hist("started_at_s", (Date.now() - TEST_START) / 1000);
   const id = `A${RUN_ID}x${k}`;
   const until = Date.now() + durationS * 1000;
-  if (ATTACK_FROM === 0 || Date.now() > ATTACK_UNTIL) {
-    ATTACK_FROM = Date.now();
-    ATTACK_UNTIL = until;
-  } else {
-    ATTACK_UNTIL = Math.max(ATTACK_UNTIL, until);
-  }
 
   try {
     const token = AUTH_MODE === "fake" ? mintEntraToken({ oid: id, name: `Abuser ${k}` }) : "";

@@ -13,6 +13,9 @@ config:
     totalS: [660]
     roomSize: [7]
     eventEveryMs: [2000]
+    # SEG-3: tramo de la prueba (en segundos) cuyas latencias se registran aparte para comparar con y sin ataque.
+    windowFromS: [245]
+    windowToS: [540]
 scenarios:
   - name: "sala de 7 jugadores"
     flow:
