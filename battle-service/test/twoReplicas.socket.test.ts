@@ -417,6 +417,32 @@ describe("Two battle-service instances sharing one Redis", { skip: !TEST_REDIS_U
     assert.equal(deliveries(), 1, "and only once");
   });
 
+  it("DIS-1: a kick on one replica cuts off the kicked player's tabs on the other replica", async () => {
+    const created = await new CreateRoom(one.stores.rooms).execute({ hostId: "x-host", displayName: "Host" });
+    const code = created.code;
+    codes.push(code);
+    const host = await client(one, "x-host");
+    const idle = await client(two, "x-idle");
+    const kicked: unknown[] = [];
+    idle.socket.on("room:kicked", (payload: unknown) => kicked.push(payload));
+    for (const p of [host, idle]) await ok(p.socket, "room:join", { roomCode: code, playerId: p.playerId, displayName: p.playerId });
+
+    await ok(host.socket, "player:kick", { roomCode: code, requesterId: "x-host", playerId: "x-idle" });
+    await waitUntil(() => kicked.length === 1, "room:kicked on the other replica");
+    assert.deepEqual(kicked[0], { roomCode: code });
+
+    // The kicked tab can no longer act in the room...
+    const refused = await emit(idle.socket, "chat:message", { roomCode: code, senderId: "x-idle", content: "still here?" });
+    assert.equal(refused.ok, false);
+    assert.equal(!refused.ok && refused.error.code, "PLAYER_NOT_IN_ROOM");
+    // ...nor receive its events.
+    await ok(host.socket, "chat:message", { roomCode: code, senderId: "x-host", content: "bye" });
+    await waitUntil(() => host.chats.some((m) => m.content === "bye"), "the host's own message");
+    await sleep(100);
+    assert.equal(idle.chats.length, 0);
+    assert.equal((await two.io.in(code).fetchSockets()).length, 1, "only the host is left in the room channel");
+  });
+
   it("lets instance 2 join a room that instance 1 created", async () => {
     const created = await new CreateRoom(one.stores.rooms).execute({ hostId: "solo", displayName: "Solo" });
     codes.push(created.code);

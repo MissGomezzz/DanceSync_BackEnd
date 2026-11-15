@@ -1,4 +1,4 @@
-import type { Server, Socket } from "socket.io";
+import type { RemoteSocket, Server, Socket } from "socket.io";
 import type { JoinRoom, JoinRoomInput, LeaveRoomOutput } from "../../application/usecases/JoinRoom.js";
 import type { KickPlayer } from "../../application/usecases/KickPlayer.js";
 import type { ReapRooms } from "../../application/usecases/ReapRooms.js";
@@ -38,6 +38,8 @@ import {
 
 export type BattleServer = Server<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
 type BattleSocket = Socket<ClientToServerEvents, ServerToClientEvents, Record<string, never>, SocketData>;
+/** A socket of this replica or of another one (through the adapter). */
+type AnySocket = RemoteSocket<ServerToClientEvents, SocketData>;
 
 export interface SocketDependencies {
   /**
@@ -353,20 +355,26 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
   }
 
   /**
-   * Detaches every local socket bound to (roomCode, playerId): it leaves the room
-   * and player channels and loses its binding, so a second tab of a player who
-   * left can no longer act (requireOwnSeat fails) nor receive the room's events.
+   * Detaches every socket bound to (roomCode, playerId), on every replica
+   * (DIS-1: with several replicas a player's tabs may sit on another one): it
+   * leaves the room and player channels, so a second tab of a player who left
+   * can neither receive the room's events nor act (requireOwnSeat checks the
+   * room channel, and clears the stale binding of a socket of another replica).
    */
   async function unbindPlayer(
     roomCode: string,
     playerId: string,
-    beforeUnbind?: (socket: BattleSocket) => void,
+    beforeUnbind?: (socket: AnySocket) => void,
   ): Promise<void> {
-    for (const socket of io.of("/").sockets.values()) {
+    for (const socket of await io.in(playerChannel(playerId)).fetchSockets()) {
       const { roomCode: bound, playerId: boundPlayer } = socket.data;
       if (!bound || boundPlayer !== playerId || bound.toUpperCase() !== roomCode.toUpperCase()) continue;
       beforeUnbind?.(socket);
-      await unbindSocket(socket);
+      socket.leave(bound);
+      socket.leave(playerChannel(playerId));
+      // A socket of this replica also loses its binding right away.
+      const local = io.of("/").sockets.get(socket.id);
+      if (local) await unbindSocket(local);
     }
   }
 
@@ -672,6 +680,13 @@ export function registerSocketHandlers(io: BattleServer, deps: SocketDependencie
       }),
     );
 
+    // A socket unbound from another replica (kick, leave) still carries its old
+    // binding here; its seat is no longer its own, so no grace period applies.
+    socket.on("disconnecting", () => {
+      const { roomCode } = socket.data;
+      if (roomCode && !socket.rooms.has(roomCode)) clearBinding(socket);
+    });
+
     socket.on("disconnect", () => {
       const { playerId, roomCode } = socket.data;
       if (!playerId || !roomCode) return;
@@ -710,8 +725,7 @@ function seatKey(roomCode: string, playerId: string): string {
 /** Drops the socket's binding and its room and player channels. */
 async function unbindSocket(socket: BattleSocket): Promise<void> {
   const { roomCode, playerId } = socket.data;
-  socket.data.roomCode = undefined;
-  socket.data.playerId = undefined;
+  clearBinding(socket);
   if (roomCode) await socket.leave(roomCode);
   if (playerId) await socket.leave(playerChannel(playerId));
 }
@@ -745,6 +759,11 @@ async function resyncWordRound(socket: BattleSocket, deps: SocketDependencies, r
   if (!deps.wordRace) return;
   const active = await deps.wordRace.getActiveWordRound.execute({ roomCode });
   if (active) socket.emit(ServerEvents.WORD_ROUND_STARTED, roundStartedPayload(active.race, active.round, new Date()));
+}
+
+function clearBinding(socket: BattleSocket): void {
+  socket.data.roomCode = undefined;
+  socket.data.playerId = undefined;
 }
 
 function playerChannel(playerId: string): string {
@@ -789,6 +808,10 @@ function requireRoomScope(
  * in nor impersonate another player (kick them, start as the host, chat or
  * vote as them): an id it sends is only cross-checked, and naming someone else
  * is refused. Room codes are case-insensitive, like the repository lookup.
+ *
+ * The socket must still be in the room channel: another replica may have
+ * unbound it (kick, leave from another tab) and could only take it out of the
+ * channel, not clear its binding here (DIS-1). Such a stale binding is cleared.
  */
 function requireOwnSeat(
   socket: BattleSocket,
@@ -804,6 +827,10 @@ function requireOwnSeat(
     (claimedPlayerId !== undefined && claimedPlayerId !== joinedPlayer)
   ) {
     throw new DomainError("PLAYER_NOT_IN_ROOM", "The socket has not joined this room as this player");
+  }
+  if (!socket.rooms.has(joinedRoom)) {
+    clearBinding(socket);
+    throw new DomainError("PLAYER_NOT_IN_ROOM", "The socket was removed from this room");
   }
   return { roomCode: joinedRoom, playerId: joinedPlayer };
 }
