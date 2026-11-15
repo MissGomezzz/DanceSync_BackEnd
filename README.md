@@ -139,6 +139,12 @@ Defaults live in `.env.example`; every service falls back to the same values whe
 | `REDIS_STATE_TTL_SECONDS` | `86400` | battle-service (positive whole number; a room or word race key that is never touched again expires after this long) |
 | `REDIS_UPDATE_MAX_ATTEMPTS` | `12` | battle-service (positive whole number; attempts of an optimistic room update that keeps losing the race before giving up) |
 | `SOCKETIO_REDIS_KEY` | `dancesync` | battle-service (prefix of the Socket.IO adapter channels; every instance of one deployment must share it) |
+| `RATE_LIMIT_EVENTS_PER_SECOND` / `RATE_LIMIT_EVENT_BURST` | `20` / `40` | battle-service (SEG-3; token bucket of each Socket.IO connection) |
+| `RATE_LIMIT_STRIKE_THRESHOLD` / `RATE_LIMIT_STRIKE_WINDOW_SECONDS` / `RATE_LIMIT_BLOCK_SECONDS` | `40` / `10` / `30` | battle-service (SEG-3; more than the threshold of dropped events within the window blocks the client for that long) |
+| `TRUSTED_PROXY_HOPS` | `0` | battle-service, api-gateway (SEG-3; proxies in front of the service whose `X-Forwarded-For` entry is trusted to find the client's address) |
+| `RATE_LIMIT_ENABLED` | `true` | api-gateway (SEG-3; HTTP rate limit per client address) |
+| `RATE_LIMIT_<POLICY>_PER_SECOND` / `_BURST` | see `.env.example` | api-gateway (SEG-3; policies `ROOM_CREATE`, `GUEST_TOKEN`, `SOCKET_HANDSHAKE`, `SOCKET_POLLING`, `OTHER`) |
+| `REDIS_URL` (api-gateway) | empty | api-gateway (SEG-3; shared rate limit buckets; empty = this instance's memory) |
 
 `battle-service` reads its own `battle-service/.env` (see `battle-service/.env.example`). `RATING_GRACE_MS` no longer exists: a battle ends exactly when the song clip ends. `USERS_SERVICE_URL` is also where battle-service stores finished matches (`PUT /api/matches/{battleId}`, service to service).
 
@@ -336,6 +342,16 @@ Quality scenario REN-1 is documented, with its results and evidence, in [docs/qu
 - **Scale environment.** [`docker-compose.scale.yml`](docker-compose.scale.yml) starts Redis, two replicas with the same CPU and memory limit (`BATTLE_CPUS`, `BATTLE_MEMORY`), nginx as the load balancer on `http://localhost:8088` (`LB_REPLICAS=1` or `2` replicas receive traffic) and a fake Entra ID used only by the load tests.
 - **Load tests.** [`load-tests/`](load-tests/README.md) (Artillery) plays complete 7-player rooms and measures latency from the client: nominal load (140 users, 10 min) and a stress ramp to compare 1 and 2 replicas.
 - **Results.** 140 users with 2 replicas: chat p95 16.9 ms, vote p95 29.7 ms, 0 errors (target p95 <= 300 ms, < 1 % errors). Stress, 0.5 CPU per replica: 1 replica sustains 238 users and 2 replicas 427 (x1.79) at p95 <= 300 ms, with no duplicated or lost scores even when saturated.
+
+## Abuse and denial-of-service protection (SEG-3)
+
+Quality scenario SEG-3 is documented, with its tests and evidence, in [docs/quality/SEG-3-proteccion-abuso.md](docs/quality/SEG-3-proteccion-abuso.md); the decision behind it is [ADR-05](docs/adr/ADR-05-limite-eventos-y-http.md). In short:
+
+- **battle-service, per connection**: a token bucket (20 events per second, bursts of 40) runs before any event handler. Extra events are dropped, answered `RATE_LIMITED` and announced with `rate:limited`. More than 40 dropped events in 10 s block the token's identity and the client's address for 30 s (in Redis, so every replica refuses them): the connection gets `rate:blocked` and is closed, and handshakes are refused with `BLOCKED` while the block lasts.
+- **api-gateway, per address**: a token bucket per client address and kind of request (room creation, guest token, Socket.IO handshake, long-polling, the rest) inside the security chain, after CORS and before authentication; an empty bucket is answered `429` with `Retry-After`. With `REDIS_URL` the buckets are shared by every gateway instance.
+- **Client address**: taken from `X-Forwarded-For` only for the proxies in `TRUSTED_PROXY_HOPS` (0 by default: the connection's address).
+- **Incident log**: one JSON line per incident (`abuse.rate_limited`, `abuse.blocked`, `abuse.refused`), in the same shape as the SEG-1 audit trail. If Redis fails, requests go through and the error is logged.
+- **Results** (140 users plus 5 clients sending 200 events per second): the abusive client is limited within 422 ms in the worst case and blocked in all 50 connections it opened; normal users had no errors, and their p95 stayed within the run-to-run noise of the measurement.
 
 ## Authentication (SEG-1)
 
