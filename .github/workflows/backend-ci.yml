@@ -149,8 +149,17 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Run tests
-        run: pnpm test
+      # Runs the unit tests and measures coverage with c8 (fails below 80 % of lines).
+      - name: Run tests with coverage
+        run: pnpm test:coverage
+
+      # The SonarCloud job (MAN-1) reads this report.
+      - name: Upload coverage report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: battle-service-coverage
+          path: battle-service/coverage/lcov.info
+          retention-days: 7
 
       - name: Build
         run: pnpm build
