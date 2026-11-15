@@ -1,5 +1,7 @@
 package com.dancesync.gateway.security;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -34,6 +36,23 @@ public class AuthRejectionHandler implements ServerAuthenticationEntryPoint, Ser
 
     private static final Logger audit = LoggerFactory.getLogger(AUDIT_LOGGER);
 
+    /** OBS-1: gateway_auth_rejected_total{code}, counted next to each audit line. */
+    static final String REJECTED_METRIC = "gateway.auth.rejected";
+
+    private final Counter unauthorized;
+    private final Counter forbidden;
+
+    public AuthRejectionHandler(MeterRegistry meterRegistry) {
+        this.unauthorized = Counter.builder(REJECTED_METRIC)
+                .description("Requests refused by the gateway's authentication (SEG-1)")
+                .tag("code", "UNAUTHORIZED")
+                .register(meterRegistry);
+        this.forbidden = Counter.builder(REJECTED_METRIC)
+                .description("Requests refused by the gateway's authentication (SEG-1)")
+                .tag("code", "FORBIDDEN")
+                .register(meterRegistry);
+    }
+
     @Override
     public Mono<Void> commence(ServerWebExchange exchange, AuthenticationException failure) {
         exchange.getResponse().getHeaders().set(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
@@ -50,6 +69,7 @@ public class AuthRejectionHandler implements ServerAuthenticationEntryPoint, Ser
     private Mono<Void> refuse(ServerWebExchange exchange, HttpStatus status, String code, String reason,
                               String message) {
         String correlationId = CorrelationIdFilter.of(exchange);
+        (status == HttpStatus.FORBIDDEN ? forbidden : unauthorized).increment();
         audit.warn("{\"event\":\"auth.rejected\",\"channel\":\"http\",\"code\":\"{}\",\"reason\":\"{}\","
                         + "\"correlationId\":\"{}\",\"method\":\"{}\",\"path\":\"{}\"}",
                 code, reason, correlationId, exchange.getRequest().getMethod().name(),
