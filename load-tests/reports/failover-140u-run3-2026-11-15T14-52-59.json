@@ -1,0 +1,64 @@
+{
+  "scenario": "DIS-1 failover: one of two battle-service replicas killed mid-battle",
+  "label": "140u-run3",
+  "startedAt": "2026-11-15T14:52:59.858Z",
+  "finishedAt": "2026-11-15T14:55:08.126Z",
+  "setup": {
+    "roomsRequested": 20,
+    "roomSize": 7,
+    "roomsBattling": 20,
+    "usersBattling": 140,
+    "roomSetupErrors": [],
+    "victim": "battle-1",
+    "connectionsPerReplicaAtKill": {
+      "battle-1": 70,
+      "battle-2": 70
+    },
+    "killedSecondsAfterLastBattleStart": 29,
+    "wordRoundsPendingAtKill": 42,
+    "loadBalancer": "nginx OSS, least_conn, passive checks (max_fails=1 fail_timeout=10s, proxy_connect_timeout 2s)",
+    "clientReconnection": "socket.io-client defaults (1 s delay, x0.5 jitter, 5 s max), WebSocket only",
+    "generatorEventLoopDelayMaxMs": 42,
+    "machine": {
+      "platform": "win32 10.0.26200",
+      "cpus": 8,
+      "memoryGb": 16
+    }
+  },
+  "recovery": {
+    "clientsDisconnected": 70,
+    "clientsRecovered": 70,
+    "clientsNotRecovered": 0,
+    "rejoinFailures": 0,
+    "rejoinFailureCodes": [],
+    "disconnectReasons": {
+      "transport close": 70
+    },
+    "disconnectsBeforeKill": [],
+    "clientsDisconnectedMoreThanOnce": 0,
+    "maxMs": 6168,
+    "p95Ms": 6075,
+    "p50Ms": 4487,
+    "meetsBudget": true,
+    "budgetMs": 30000
+  },
+  "state": {
+    "roomsIntact": 20,
+    "roomsChecked": 20,
+    "percentIntact": 100,
+    "meetsTarget": true,
+    "failedChecks": [],
+    "duplicateRoundEndEvents": 0,
+    "chatFailures": 1,
+    "votesFailed": 0
+  },
+  "results": {
+    "battlesFinished": 20,
+    "rowsInPostgres": 20,
+    "lost": 0,
+    "lostIds": [],
+    "duplicates": 0,
+    "persistedScoreMismatches": [],
+    "meetsTarget": true
+  }
+}

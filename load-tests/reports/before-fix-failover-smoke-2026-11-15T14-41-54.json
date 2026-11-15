@@ -1,0 +1,86 @@
+{
+  "scenario": "DIS-1 failover: one of two battle-service replicas killed mid-battle",
+  "label": "smoke",
+  "startedAt": "2026-11-15T14:41:54.819Z",
+  "finishedAt": "2026-11-15T14:44:22.370Z",
+  "setup": {
+    "roomsRequested": 2,
+    "roomSize": 7,
+    "roomsBattling": 2,
+    "usersBattling": 14,
+    "roomSetupErrors": [],
+    "victim": "battle-1",
+    "connectionsPerReplicaAtKill": {
+      "battle-1": 7,
+      "battle-2": 7
+    },
+    "killedSecondsAfterLastBattleStart": 17,
+    "wordRoundsPendingAtKill": 5,
+    "loadBalancer": "nginx OSS, least_conn, passive checks (max_fails=1 fail_timeout=10s, proxy_connect_timeout 2s)",
+    "clientReconnection": "socket.io-client defaults (1 s delay, x0.5 jitter, 5 s max), WebSocket only",
+    "generatorEventLoopDelayMaxMs": 37,
+    "machine": {
+      "platform": "win32 10.0.26200",
+      "cpus": 8,
+      "memoryGb": 16
+    }
+  },
+  "recovery": {
+    "clientsDisconnected": 7,
+    "clientsRecovered": 5,
+    "clientsNotRecovered": 2,
+    "rejoinFailures": 2,
+    "rejoinFailureCodes": [
+      "ROOM_NOT_WAITING",
+      "ROOM_NOT_WAITING"
+    ],
+    "disconnectReasons": {
+      "transport close": 7
+    },
+    "disconnectsBeforeKill": [],
+    "clientsDisconnectedMoreThanOnce": 0,
+    "maxMs": 3821,
+    "p95Ms": 3821,
+    "p50Ms": 3708,
+    "meetsBudget": false,
+    "budgetMs": 30000
+  },
+  "state": {
+    "roomsIntact": 0,
+    "roomsChecked": 2,
+    "percentIntact": 0,
+    "meetsTarget": false,
+    "failedChecks": [
+      {
+        "room": "NU8GFB",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "HHUK7X",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      }
+    ],
+    "duplicateRoundEndEvents": 0,
+    "chatFailures": 35,
+    "votesFailed": 0
+  },
+  "results": {
+    "battlesFinished": 2,
+    "rowsInPostgres": 2,
+    "lost": 0,
+    "lostIds": [],
+    "duplicates": 0,
+    "persistedScoreMismatches": [],
+    "meetsTarget": true
+  }
+}

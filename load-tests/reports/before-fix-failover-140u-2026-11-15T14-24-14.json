@@ -1,0 +1,222 @@
+{
+  "scenario": "DIS-1 failover: one of two battle-service replicas killed mid-battle",
+  "label": "140u",
+  "startedAt": "2026-11-15T14:24:14.485Z",
+  "finishedAt": "2026-11-15T14:26:57.322Z",
+  "setup": {
+    "roomsRequested": 20,
+    "roomSize": 7,
+    "roomsBattling": 20,
+    "usersBattling": 140,
+    "roomSetupErrors": [],
+    "victim": "battle-2",
+    "connectionsPerReplicaAtKill": {
+      "battle-1": 63,
+      "battle-2": 65
+    },
+    "killedSecondsAfterLastBattleStart": 37,
+    "wordRoundsPendingAtKill": 60,
+    "loadBalancer": "nginx OSS, least_conn, passive checks (max_fails=1 fail_timeout=10s, proxy_connect_timeout 2s)",
+    "clientReconnection": "socket.io-client defaults (1 s delay, x0.5 jitter, 5 s max), WebSocket only",
+    "generatorEventLoopDelayMaxMs": 594,
+    "machine": {
+      "platform": "win32 10.0.26200",
+      "cpus": 8,
+      "memoryGb": 16
+    }
+  },
+  "recovery": {
+    "clientsDisconnected": 49,
+    "clientsRecovered": 45,
+    "clientsNotRecovered": 4,
+    "rejoinFailures": 11,
+    "rejoinFailureCodes": [
+      "ROOM_NOT_WAITING",
+      "ROOM_NOT_WAITING",
+      "ROOM_NOT_WAITING",
+      "ROOM_NOT_WAITING",
+      "ROOM_NOT_WAITING",
+      "ROOM_NOT_WAITING",
+      "ROOM_NOT_WAITING",
+      "ROOM_NOT_WAITING",
+      "TIMEOUT",
+      "TIMEOUT",
+      "TIMEOUT"
+    ],
+    "disconnectReasons": {
+      "transport close": 49
+    },
+    "clientsDisconnectedMoreThanOnce": 0,
+    "maxMs": 3997,
+    "p95Ms": 3975,
+    "p50Ms": 3335,
+    "meetsBudget": false,
+    "budgetMs": 30000
+  },
+  "state": {
+    "roomsIntact": 5,
+    "roomsChecked": 20,
+    "percentIntact": 25,
+    "meetsTarget": false,
+    "failedChecks": [
+      {
+        "room": "JFJCG9",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "7MP6KR",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "PY3E6Z",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "RP9BMV",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "4B8XBE",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "ZL4KJE",
+        "failed": [
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "55DRY4",
+        "failed": [
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "2V8VN4",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "GRFJ78",
+        "failed": [
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "BGQLXH",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "QSR9B4",
+        "failed": [
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "LBH7H3",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "L52BE9",
+        "failed": [
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "5C7GWM",
+        "failed": [
+          "sameBattleFinishedAtSongEnd",
+          "everyPlayerStillSeated",
+          "votesKept",
+          "everyRoundOpenedAndClosed"
+        ]
+      },
+      {
+        "room": "EN84CM",
+        "failed": [
+          "everyRoundOpenedAndClosed"
+        ]
+      }
+    ],
+    "duplicateRoundEndEvents": 0,
+    "chatFailures": 327,
+    "votesFailed": 61
+  },
+  "results": {
+    "battlesFinished": 13,
+    "rowsInPostgres": 13,
+    "lost": 0,
+    "lostIds": [],
+    "duplicates": 0,
+    "persistedScoreMismatches": [
+      {
+        "room": "JFJCG9",
+        "dancer": "guest-f5fdbeab-90d8-40e9-ac74-eb0bec288636"
+      },
+      {
+        "room": "7MP6KR",
+        "dancer": "guest-42089550-9f5c-433b-9ed0-eb8175ed1bb7"
+      },
+      {
+        "room": "PY3E6Z",
+        "dancer": "guest-73f5099f-85ec-41fa-9e22-5c30c73975dc"
+      },
+      {
+        "room": "RP9BMV",
+        "dancer": "guest-015b0b87-fc0e-4dbb-9976-594464f7f625"
+      },
+      {
+        "room": "4B8XBE",
+        "dancer": "guest-667f17f8-068c-442c-afb3-d195996d72a3"
+      },
+      {
+        "room": "LBH7H3",
+        "dancer": "guest-23810f5f-b221-46df-bb3c-9e04f0769c18"
+      },
+      {
+        "room": "5C7GWM",
+        "dancer": "guest-f3b4a22a-9d20-4e0f-b7ac-6d3d491b26d0"
+      }
+    ],
+    "meetsTarget": false
+  }
+}

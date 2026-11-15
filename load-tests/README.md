@@ -167,3 +167,19 @@ aumenta más de un 5 %. Con una segunda línea base muestra también cuánto var
 (el ruido de la medición) y compara contra la peor de las dos bases. Con reportes anteriores, sin
 `dancesync.window.*`, estima el p95 del tramo con los resúmenes de 10 s de Artillery, con el mismo método para los
 tres archivos (`--from` y `--to` cambian el tramo).
+
+## Failover (DIS-1)
+
+`scripts/failover.mjs` verifies DIS-1 end to end: it starts `docker-compose.scale.yml` plus `docker-compose.failover.yml` (users-service with its own throwaway PostgreSQL) as compose project `dis1test` on ports 18088 / 13001 / 13002, plays 20 rooms of 7 users up to a running battle through the load balancer (clients reconnect like the frontend and repeat `room:join`), snapshots the rooms and word races from Redis, kills one replica with `docker kill`, and measures:
+
+- time from the kill until every client that lost its connection receives room events again (max, p95, p50; target < 30 s);
+- rooms whose state and scores are intact (same battle finished at the end of the song, every player still seated, no vote lost, no word lost or counted twice, every round opened and closed; target >= 95 %);
+- finished battles against the rows stored in PostgreSQL (0 lost, 0 duplicated, persisted scores equal to the room's).
+
+```bash
+npm install
+node scripts/failover.mjs                         # 20 rooms x 7 users, kills the busiest replica
+node scripts/failover.mjs --rooms 10 --keep-up    # smaller run, keep the stack afterwards
+```
+
+Options: `--rooms`, `--room-size`, `--victim busiest|battle-1|battle-2` (default `busiest`: the replica with more connections at the kill), `--kill-after-s` (after the last battle started, default 25), `--no-start` (reuse a running stack), `--keep-up`, `--logs <file>` (save the replicas' logs before removing the stack), `--label`. All bots run in this one process: the script never blocks it (docker is called asynchronously while they are connected) and reports its worst event loop delay. The report is written to `reports/failover-<label>-<timestamp>.json` and `.md`; the stack is removed afterwards unless `--keep-up`.
