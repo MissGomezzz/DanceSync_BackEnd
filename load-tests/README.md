@@ -62,6 +62,7 @@ node scripts/run.mjs stress  --target http://localhost:3000 --label estres-1-rep
 - `--target` es la URL del Battle Service (directo, o el balanceador/gateway).
 - `--label` queda en el nombre del reporte: `results/<escenario>-<label>-<fecha>.json`.
 - `node scripts/summary.mjs results/<archivo>.json` vuelve a imprimir el resumen y el veredicto.
+- `node scripts/compare.mjs <estres-1-replica.json> <estres-2-replicas.json>` compara el máximo de usuarios sostenido (evidencia de escalabilidad horizontal).
 - Los escenarios están en `scenarios/*.yml`; `totalS` debe ser la suma de las fases (subida + sostenido).
 - Cada sala termina el ciclo de batalla en curso al acabar `totalS`, así que la corrida dura hasta ~100 s más.
 
@@ -105,3 +106,17 @@ Para apagar todo: `docker compose -f docker-compose.scale.yml down`.
 El balanceador de este prototipo hace verificación de salud pasiva (nginx de código abierto): si una réplica falla,
 las conexiones nuevas van a la otra. En Azure Container Apps el ingreso hace sondeos activos.
 Las credenciales del compose son de prueba y no deben usarse fuera de una máquina de pruebas.
+
+## Reglas para que una prueba sea válida
+
+- **Una sola prueba a la vez.** `run.mjs` crea `results/.running` y se niega a arrancar si otra corrida sigue activa
+  (dos generadores en la misma máquina se disputan CPU y red). El candado se libera solo al terminar o con Ctrl+C.
+- **El entorno debe estar limpio y en el modo correcto antes de cada corrida de estrés:**
+  `docker compose -f ../docker-compose.scale.yml down`, luego `set LB_REPLICAS=1` (o 2) en su propia línea y `up -d`.
+  `run.mjs` detecta cuántas réplicas reciben tráfico y lo guarda en `results/<corrida>.meta.json`.
+- **Recursos:** cada corrida guarda `results/<corrida>.recursos.csv` (CPU de la máquina y de cada contenedor cada 5 s)
+  y al final imprime el máximo y el promedio. El 100 % de `docker stats` es UN núcleo: con 0,5 CPU por réplica el tope es ~50 %.
+- **Salud del generador:** el resumen incluye el retraso del bucle de eventos de Artillery. Si sale "SATURADO", las
+  latencias incluyen el retraso del propio generador y no son del servidor.
+- `compare.mjs` rechaza la comparación si las dos pruebas se solaparon en el tiempo y avisa si el número de réplicas o el
+  límite de CPU no corresponde.

@@ -2,6 +2,7 @@
 // Lee el JSON de Artillery y compara contra el criterio de REN-1:
 //   p95 <= 300 ms, < 1 % de errores, sin pérdida ni duplicación de puntajes, un único ganador por ronda.
 import { readFileSync } from "node:fs";
+import { analyzeStress } from "./stress-analysis.mjs";
 
 const file = process.argv[2];
 if (!file) {
@@ -40,6 +41,12 @@ console.log(row("acuse de cualquier evento", sums["dancesync.ack_ms"]));
 console.log(row("HTTP crear sala", sums["dancesync.http_create_room_ms"]));
 console.log(row("HTTP token de invitado", sums["dancesync.guest_token_ms"]));
 
+const lag = sums["dancesync.generator_loop_lag_ms"];
+if (lag) {
+  const saturated = lag.p95 > 50 || lag.max > 250;
+  console.log(`\nGenerador de carga: retraso del bucle de eventos p95=${fmt(lag.p95)} ms, máx=${fmt(lag.max)} ms ${saturated ? "-> SATURADO: las latencias medidas incluyen el retraso del propio generador" : "(sano)"}`);
+}
+
 const sent = c("events_sent");
 const errors = c("errors");
 const errorRate = sent > 0 ? errors / sent : 0;
@@ -61,24 +68,14 @@ for (const [label, ok, detail] of checks) console.log(`  ${ok ? "PASA " : "FALLA
 
 // Prueba de estrés: usuarios concurrentes vs p95 por intervalo de Artillery (cada ~10 s).
 if (kind === "stress") {
-  const inter = report.intermediate ?? [];
-  let created = 0;
-  let completed = 0;
-  let maxOk = 0;
-  let broken = false;
+  const analysis = analyzeStress(report, { roomSize: ROOM_SIZE });
   console.log("\nEstrés (usuarios concurrentes vs p95 del chat por intervalo):");
-  for (const p of inter) {
-    created += p.counters?.["vusers.created"] ?? 0;
-    completed += p.counters?.["vusers.completed"] ?? 0;
-    const users = (created - completed) * ROOM_SIZE;
-    const s = p.summaries?.["dancesync.chat_e2e_ms"];
-    if (!s) continue;
-    const ok = s.p95 <= P95_LIMIT_MS;
-    if (!ok) broken = true;
-    if (ok && !broken) maxOk = Math.max(maxOk, users);
-    console.log(`  usuarios=${String(users).padStart(5)}  p95=${fmt(s.p95).padStart(8)} ms  ${ok ? "ok" : "SUPERA 300 ms"}`);
+  for (const p of analysis.points) {
+    console.log(`  usuarios=${String(p.users).padStart(5)}  p95=${fmt(p.p95).padStart(8)} ms  ${p.ok ? "ok" : "SUPERA 300 ms"}`);
   }
-  console.log(`\nMáximo de usuarios sostenido con p95 <= ${P95_LIMIT_MS} ms: ${maxOk}`);
+  console.log(`\nMáximo de usuarios sostenido con p95 <= ${P95_LIMIT_MS} ms: ${analysis.maxUsersOk}`);
+  if (analysis.reachedLimit) console.log(`Se superó el límite de forma sostenida a partir de ${analysis.usersAtBreak} usuarios.`);
+  else console.log(`AVISO: no se superó el límite (pico de ${analysis.peakUsers} usuarios). El máximo real es mayor: sube los arrivalCount de scenarios/stress.yml y repite.`);
 }
 console.log("");
 process.exit(checks.every(([, ok]) => ok) ? 0 : 1);

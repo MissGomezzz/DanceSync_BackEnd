@@ -1,19 +1,23 @@
 # REN-1, prueba de estrés: se suben salas por rampa hasta que el p95 supere 300 ms.
-# Cada sala se queda hasta totalS, así que los usuarios concurrentes crecen en la rampa.
-# 0.1 -> 0.8 salas/s durante 300 s (~135 salas, ~945 usuarios) y luego 120 s a 0.8 salas/s
-# (~230 salas, ~1.600 usuarios). Ajusta arrivalRate/rampTo según la capacidad de tu máquina.
-# totalS = 300 + 120.
+# Cada sala se queda hasta totalS, así que los usuarios concurrentes solo crecen.
+#
+# Salas que llegan por minuto: 4, 6, 9, 12, 15, 18 (rampa de 6 min) y 18 más en una meseta de 1 min.
+# Usuarios acumulados (7 por sala): 28, 70, 133, 217, 322, 448 y 574 al final.
+# Calibrado con la medición de REN-1: ~0,46 núcleos para 140 usuarios, así que con 0,5 CPU por réplica
+# se espera saturar 1 réplica cerca de 150 usuarios y 2 réplicas cerca de 300.
+# Si la prueba termina sin superar 300 ms, el resumen lo avisa: sube los arrivalCount y repite.
+# totalS = 6 x 60 + 60 = 420.
 config:
   target: "http://localhost:8080"
   processor: "../lib/room-bot.cjs"
   phases:
-    - name: rampa
-      duration: 300
-      arrivalRate: 0.1
-      rampTo: 0.8
-    - name: meseta
-      duration: 120
-      arrivalRate: 0.8
+    - { name: "min-1", duration: 60, arrivalCount: 4 }
+    - { name: "min-2", duration: 60, arrivalCount: 6 }
+    - { name: "min-3", duration: 60, arrivalCount: 9 }
+    - { name: "min-4", duration: 60, arrivalCount: 12 }
+    - { name: "min-5", duration: 60, arrivalCount: 15 }
+    - { name: "min-6", duration: 60, arrivalCount: 18 }
+    - { name: "meseta", duration: 60, arrivalCount: 18 }
   variables:
     totalS: [420]
     roomSize: [7]

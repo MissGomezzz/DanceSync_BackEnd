@@ -26,6 +26,7 @@
  * Parámetros: `-t URL` (destino) y las variables del escenario (totalS, roomSize, eventEveryMs).
  * Variables de entorno opcionales: BASE, TRANSPORTS, AUTH_MODE (fake|none), ACK_TIMEOUT_MS.
  */
+const { monitorEventLoopDelay } = require("node:perf_hooks");
 const { io } = require("socket.io-client");
 const { mintEntraToken } = require("./fake-entra.cjs");
 
@@ -325,6 +326,22 @@ async function runCycle(room) {
   await readyEveryone(room);
 }
 
+/**
+ * ¿Está saturado el propio generador de carga? Si el bucle de eventos de este proceso se retrasa, las latencias
+ * medidas desde aquí incluyen ese retraso y no son del servidor. Cada 5 s se reporta el p95 del retraso (ms).
+ */
+const LOOP_RESOLUTION_MS = 20;
+function watchGeneratorHealth(events) {
+  const histogram = monitorEventLoopDelay({ resolution: LOOP_RESOLUTION_MS });
+  histogram.enable();
+  setInterval(() => {
+    // El histograma incluye la resolución como base: lo que excede de ella es retraso real.
+    const lag = Math.max(0, histogram.percentile(95) / 1e6 - LOOP_RESOLUTION_MS);
+    events.emit("histogram", "dancesync.generator_loop_lag_ms", lag);
+    histogram.reset();
+  }, 5000).unref();
+}
+
 /** Función de flujo de Artillery: una sala completa. */
 async function runRoomAsync(context, events) {
   if (END_AT === 0) {
@@ -334,6 +351,7 @@ async function runRoomAsync(context, events) {
     ROOM_SIZE = Math.min(Number(v.roomSize ?? process.env.ROOM_SIZE ?? ROOM_SIZE), 7);
     EVENT_EVERY_MS = Number(v.eventEveryMs ?? process.env.EVENT_EVERY_MS ?? EVENT_EVERY_MS);
     END_AT = Date.now() + TOTAL_S * 1000;
+    watchGeneratorHealth(events);
   }
   const n = roomSeq++;
   const room = {

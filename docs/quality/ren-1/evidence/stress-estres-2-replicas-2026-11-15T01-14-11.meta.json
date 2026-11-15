@@ -1,0 +1,53 @@
+{
+  "scenario": "stress",
+  "label": "estres-2-replicas",
+  "target": "http://localhost:8088",
+  "replicas": 2,
+  "cpusPerReplica": 0.5,
+  "startedAt": "2026-11-15T01:14:11.666Z",
+  "endedAt": "2026-11-15T01:23:11.213Z",
+  "resources": {
+    "host (todos los núcleos)": {
+      "maxCpu": 57.7,
+      "avgCpu": 39.3,
+      "maxMemMiB": 16619,
+      "samples": 106
+    },
+    "dancesync-lb": {
+      "maxCpu": 28.4,
+      "avgCpu": 12.5,
+      "maxMemMiB": 80476,
+      "samples": 106
+    },
+    "dancesync-battle-1": {
+      "maxCpu": 52.5,
+      "avgCpu": 29.7,
+      "maxMemMiB": 68,
+      "samples": 106
+    },
+    "dancesync-battle-2": {
+      "maxCpu": 52.3,
+      "avgCpu": 29.5,
+      "maxMemMiB": 72,
+      "samples": 106
+    },
+    "dancesync-scale-redis-1": {
+      "maxCpu": 20.7,
+      "avgCpu": 8.9,
+      "maxMemMiB": 8680,
+      "samples": 106
+    },
+    "dancesync-scale-fake-entra-1": {
+      "maxCpu": 38.3,
+      "avgCpu": 8.5,
+      "maxMemMiB": 31887,
+      "samples": 106
+    },
+    "dancesync-postgres": {
+      "maxCpu": 6.6,
+      "avgCpu": 0.2,
+      "maxMemMiB": 32676,
+      "samples": 106
+    }
+  }
+}
