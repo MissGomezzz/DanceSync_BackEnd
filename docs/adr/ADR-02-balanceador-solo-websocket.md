@@ -22,8 +22,8 @@ Las conexiones de una batalla duran minutos. Repartir por turno (round robin) cu
 
 - **Los clientes se conectan por WebSocket desde el inicio**, con long-polling solo como respaldo: `transports: ['websocket', 'polling']` y `tryAllTransports: true` en el cliente de Socket.IO (`DanceSync_FrontEnd`, `src/shared/lib/socket.ts`). En el caso normal no hay ninguna petición de long-polling, así que no hace falta afinidad de sesión. Si WebSocket no está disponible, el cliente cae a long-polling en lugar de no conectarse.
 - **Un balanceador con verificaciones de salud** delante de las réplicas:
-  - **Prototipo local:** nginx (`load-balancer/`) con `least_conn`, que envía cada conexión nueva a la réplica con menos conexiones abiertas. Hace la actualización a WebSocket, usa tiempos de espera de 1 hora para conexiones largas y verificación de salud pasiva: tras 2 fallos en 5 s, la réplica sale de rotación y el siguiente intento va a la otra.
-  - **Azure:** el ingreso de Azure Container Apps, con sondeos de salud sobre `GET /api/battles/health`, sin afinidad de sesión.
+  - **Prototipo local:** nginx (`load-balancer/`) con `least_conn`, que envía cada conexión nueva a la réplica con menos conexiones abiertas. Hace la actualización a WebSocket, usa tiempos de espera de 1 hora para conexiones largas y verificación de salud pasiva: tras 1 fallo (conexión rechazada o sin respuesta en 2 s) la réplica sale de rotación por 10 s y el mismo intento se repite en la otra (ajustado por DIS-1, ver [ADR-06](ADR-06-availability-failover.md)).
+  - **Azure:** el ingreso de Azure Container Apps, con sondeos de salud sobre `GET /api/battles/health` (vida) y `GET /api/battles/health/ready` (lista: Redis responde; DIS-1), sin afinidad de sesión.
 - **Prueba justa.** El entorno de escala puede enviar tráfico a 1 o a 2 réplicas (`LB_REPLICAS`) con la misma pila, para comparar capacidad cambiando solo esa variable.
 
 ## Alternativas consideradas
@@ -61,5 +61,5 @@ Sin `tryAllTransports`, el orden `['websocket', 'polling']` no cae al segundo tr
 
 - **El respaldo necesita afinidad.** Un cliente que no pueda usar WebSocket cae a long-polling, y con varias réplicas sin afinidad esa conexión puede fallar. Se acepta: es un caso raro, y sin el respaldo ese cliente no se conectaría de ninguna forma.
 - **Detección pasiva en el prototipo.** nginx descubre una réplica caída cuando falla una conexión hacia ella, no con sondeos periódicos.
-- **El endpoint de salud no comprueba Redis.** Una réplica sin acceso a Redis seguiría recibiendo tráfico. Hay que agregarlo.
+- ~~**El endpoint de salud no comprueba Redis.**~~ Resuelto en DIS-1: `GET /api/battles/health/ready` responde 503 si Redis no contesta ([ADR-06](ADR-06-availability-failover.md)).
 - **El API Gateway queda en el camino** en producción (Spring Cloud Gateway hace de proxy del WebSocket). Las pruebas de rendimiento entraron directamente por el balanceador, así que falta medir con el gateway.
