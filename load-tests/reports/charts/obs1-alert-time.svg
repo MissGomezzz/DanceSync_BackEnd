@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="400" viewBox="0 0 760 400" role="img" aria-labelledby="t d">
+  <title id="t">OBS-1 time to alert per run</title>
+  <desc id="d">Run 1 BattleReplicaDown: 24.5 s; Run 2 BattleReplicaDown: 24.1 s; Run 3 BattleReplicaDown: 23.5 s; Run 4 BattleReplicaDown: 24.0 s; Run 5 BattleReplicaDown: 23.5 s; Run 1 HighRealtimeLatency: 28.2 s; Run 2 HighRealtimeLatency: 29.7 s; Run 3 HighRealtimeLatency: 29.5 s; Run 4 HighRealtimeLatency: 29.4 s; Run 5 HighRealtimeLatency: 29.7 s</desc>
+  <style>
+    svg { --surface: #fcfcfb; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #6f6e69;
+          --grid: #e4e3df; --axis: #a9a8a2; --series-1: #2a78d6; --series-2: #eb6834;
+          --good: #006300; --good-fill: #e3f1e3; --bad: #b3261e; --bad-fill: #fbe9e7; --target: #0b0b0b; }
+    @media (prefers-color-scheme: dark) {
+      svg { --surface: #1a1a19; --text-1: #f0efec; --text-2: #c3c2b7; --text-3: #9d9c94;
+            --grid: #2e2e2c; --axis: #5c5b56; --series-1: #3987e5; --series-2: #d95926;
+            --good: #5fc85f; --good-fill: #1f2e1f; --bad: #f28b82; --bad-fill: #3a1f1d; --target: #f0efec; }
+    }
+    text { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; fill: var(--text-2); }
+    .title { font-size: 16px; font-weight: 600; fill: var(--text-1); }
+    .subtitle { font-size: 12px; fill: var(--text-2); }
+    .tick { font-size: 11px; fill: var(--text-3); }
+    .label { font-size: 12px; fill: var(--text-1); }
+    .detail { font-size: 11px; fill: var(--text-3); }
+    .value { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .target-label { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .note { font-size: 11px; fill: var(--text-3); }
+  </style>
+  <rect width="760" height="400" fill="var(--surface)"/>
+  <text class="title" x="24" y="30">Time until the alert is firing</text>
+  <text class="subtitle" x="24" y="52">Seconds from the degradation (t0) until Prometheus reports the alert as firing, under load, per run</text>
+  <rect x="24" y="69" width="10" height="10" rx="2" fill="var(--series-1)"/>
+  <text class="label" x="40" y="78">BattleReplicaDown (replica killed)</text>
+  <rect x="284.4" y="69" width="10" height="10" rx="2" fill="var(--series-2)"/>
+  <text class="label" x="300.4" y="78">HighRealtimeLatency (Redis slowed)</text>
+  <line x1="56" x2="736" y1="344" y2="344" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="348" text-anchor="end">0 s</text>
+  <line x1="56" x2="736" y1="305.84615384615387" y2="305.84615384615387" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="309.84615384615387" text-anchor="end">10 s</text>
+  <line x1="56" x2="736" y1="267.6923076923077" y2="267.6923076923077" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="271.6923076923077" text-anchor="end">20 s</text>
+  <line x1="56" x2="736" y1="229.53846153846155" y2="229.53846153846155" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="233.53846153846155" text-anchor="end">30 s</text>
+  <line x1="56" x2="736" y1="191.3846153846154" y2="191.3846153846154" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="195.3846153846154" text-anchor="end">40 s</text>
+  <line x1="56" x2="736" y1="153.23076923076923" y2="153.23076923076923" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="157.23076923076923" text-anchor="end">50 s</text>
+  <line x1="56" x2="736" y1="115.07692307692307" y2="115.07692307692307" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="119.07692307692307" text-anchor="end">60 s</text>
+  <line x1="56" x2="736" y1="115.07692307692307" y2="115.07692307692307" stroke="var(--target)" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="target-label" x="736" y="107.07692307692307" text-anchor="end">Target: alert in &lt; 60 s</text>
+  <path d="M93,344 V254.57649230769232 Q93,250.57649230769232 97,250.57649230769232 H119 Q123,250.57649230769232 123,254.57649230769232 V344 Z" fill="var(--series-1)"><title>Run 1, BattleReplicaDown (battle-1 killed): 24.5 s</title></path>
+  <text class="value" x="108" y="244.57649230769232" text-anchor="middle">24</text>
+  <path d="M125,344 V240.40996923076924 Q125,236.40996923076924 129,236.40996923076924 H151 Q155,236.40996923076924 155,240.40996923076924 V344 Z" fill="var(--series-2)"><title>Run 1, HighRealtimeLatency (redis degraded): 28.2 s</title></path>
+  <text class="value" x="140" y="230.40996923076924" text-anchor="middle">28</text>
+  <text class="label" x="124" y="364" text-anchor="middle">Run 1</text>
+  <text class="detail" x="124" y="380" text-anchor="middle">battle-1 killed</text>
+  <path d="M229,344 V256.1904 Q229,252.1904 233,252.1904 H255 Q259,252.1904 259,256.1904 V344 Z" fill="var(--series-1)"><title>Run 2, BattleReplicaDown (battle-2 killed): 24.1 s</title></path>
+  <text class="value" x="244" y="246.1904" text-anchor="middle">24</text>
+  <path d="M261,344 V234.66018461538462 Q261,230.66018461538462 265,230.66018461538462 H287 Q291,230.66018461538462 291,234.66018461538462 V344 Z" fill="var(--series-2)"><title>Run 2, HighRealtimeLatency (redis degraded): 29.7 s</title></path>
+  <text class="value" x="276" y="224.66018461538462" text-anchor="middle">30</text>
+  <text class="label" x="260" y="364" text-anchor="middle">Run 2</text>
+  <text class="detail" x="260" y="380" text-anchor="middle">battle-2 killed</text>
+  <path d="M365,344 V258.3689846153846 Q365,254.3689846153846 369,254.3689846153846 H391 Q395,254.3689846153846 395,258.3689846153846 V344 Z" fill="var(--series-1)"><title>Run 3, BattleReplicaDown (battle-1 killed): 23.5 s</title></path>
+  <text class="value" x="380" y="248.3689846153846" text-anchor="middle">23</text>
+  <path d="M397,344 V235.44615384615383 Q397,231.44615384615383 401,231.44615384615383 H423 Q427,231.44615384615383 427,235.44615384615383 V344 Z" fill="var(--series-2)"><title>Run 3, HighRealtimeLatency (redis degraded): 29.5 s</title></path>
+  <text class="value" x="412" y="225.44615384615383" text-anchor="middle">30</text>
+  <text class="label" x="396" y="364" text-anchor="middle">Run 3</text>
+  <text class="detail" x="396" y="380" text-anchor="middle">battle-1 killed</text>
+  <path d="M501,344 V256.5147076923077 Q501,252.5147076923077 505,252.5147076923077 H527 Q531,252.5147076923077 531,256.5147076923077 V344 Z" fill="var(--series-1)"><title>Run 4, BattleReplicaDown (battle-2 killed): 24.0 s</title></path>
+  <text class="value" x="516" y="246.5147076923077" text-anchor="middle">24</text>
+  <path d="M533,344 V235.78572307692306 Q533,231.78572307692306 537,231.78572307692306 H559 Q563,231.78572307692306 563,235.78572307692306 V344 Z" fill="var(--series-2)"><title>Run 4, HighRealtimeLatency (redis degraded): 29.4 s</title></path>
+  <text class="value" x="548" y="225.78572307692306" text-anchor="middle">29</text>
+  <text class="label" x="532" y="364" text-anchor="middle">Run 4</text>
+  <text class="detail" x="532" y="380" text-anchor="middle">battle-2 killed</text>
+  <path d="M637,344 V258.38806153846156 Q637,254.38806153846156 641,254.38806153846156 H663 Q667,254.38806153846156 667,258.38806153846156 V344 Z" fill="var(--series-1)"><title>Run 5, BattleReplicaDown (battle-1 killed): 23.5 s</title></path>
+  <text class="value" x="652" y="248.38806153846156" text-anchor="middle">23</text>
+  <path d="M669,344 V234.62584615384617 Q669,230.62584615384617 673,230.62584615384617 H695 Q699,230.62584615384617 699,234.62584615384617 V344 Z" fill="var(--series-2)"><title>Run 5, HighRealtimeLatency (redis degraded): 29.7 s</title></path>
+  <text class="value" x="684" y="224.62584615384617" text-anchor="middle">30</text>
+  <text class="label" x="668" y="364" text-anchor="middle">Run 5</text>
+  <text class="detail" x="668" y="380" text-anchor="middle">battle-1 killed</text>
+  <line x1="56" x2="736" y1="344" y2="344" stroke="var(--axis)" stroke-width="1"/>
+</svg>

@@ -422,6 +422,34 @@ The runs while the harness was being written found a real defect, now fixed (rep
 
 Turn the setup on before a demo and off afterwards with [`scripts/azure-availability.ps1`](scripts/azure-availability.ps1) (`up`, `down`, `status`; `-IncludePostgres` also starts or stops PostgreSQL). With `down`, battle-service and Redis scale to zero, so no compute is billed.
 
+## Observability (OBS-1)
+
+Quality scenario OBS-1 is documented, with its evidence, in [docs/quality/OBS-1-observabilidad.md](docs/quality/OBS-1-observabilidad.md); the contract is [PRD-OBS-1](docs/prd/PRD-OBS-1-observability.md). In short:
+
+- **Logs**: one JSON object per line in the three services, with the `correlationId` the gateway keeps or generates (`X-Correlation-Id`). battle-service writes it on every Socket.IO event line, keeps the one of `battle:start` for the timer-driven lines of the battle and sends it to users-service with the match result.
+- **Metrics**: battle-service serves `/metrics` on `METRICS_PORT` (9464), the Java services `/actuator/prometheus` on their management port (9081, 9082). None of them is routed by the gateway or nginx.
+- **Local stack**: [`docker-compose.observability.yml`](docker-compose.observability.yml) runs the backend behind the gateway plus Prometheus (5 s scrape and evaluation, one target per battle replica), the Redis and PostgreSQL exporters and Grafana with two provisioned dashboards (Business, Technical) and five alert rules (`observability/`). Local only: Prometheus and Grafana are not deployed to Azure, to save the student credit; the services' logs and metrics endpoints are.
+
+```bash
+docker compose -f docker-compose.observability.yml up -d --build
+# Gateway http://localhost:18080, Grafana http://localhost:13300 (anonymous viewer), Prometheus http://localhost:19090
+cd load-tests && npm install
+node scripts/obs-metrics-lag.mjs && node scripts/obs-trace.mjs && node scripts/obs-alert-time.mjs && node scripts/obs-charts.mjs
+```
+
+**Results** (Windows 11, 8 CPUs, Docker Desktop; alert runs with 8 rooms / 56 users playing through the gateway):
+
+| Measure | Target | Result |
+|---|---|---|
+| Metrics delay (room created through the gateway until Prometheus shows it), 20 samples | <= 15 s | p50 1.1 s, p95 4.7 s, max 5.0 s (10.0 s worst case on screen with Grafana's 5 s refresh) |
+| `BattleReplicaDown` after `docker kill` of a replica, 5 runs | < 60 s | 23.5-24.5 s |
+| `HighRealtimeLatency` with Redis slowed down (`DEBUG SLEEP`), 5 runs | < 60 s | 28.2-29.7 s |
+| One correlation id through the three services | 3 of 3 | api-gateway 4 lines, battle-service 25 (both replicas), users-service 2, ending with `PUT /api/matches/{id}` |
+
+![OBS-1 scorecard: metrics visible in 5.0 s at worst, alert firing in 29.7 s at worst, 3 of 3 services traced](load-tests/reports/charts/obs1-scorecard.svg)
+
+Known limitation: the gateway's security audit lines (`dancesync.security.audit`, owned by the audit scope) keep their previous text format; every other log line is JSON.
+
 ## Abuse and denial-of-service protection (SEG-3)
 
 Quality scenario SEG-3 is documented, with its tests and evidence, in [docs/quality/SEG-3-proteccion-abuso.md](docs/quality/SEG-3-proteccion-abuso.md); the decision behind it is [ADR-05](docs/adr/ADR-05-limite-eventos-y-http.md). In short:

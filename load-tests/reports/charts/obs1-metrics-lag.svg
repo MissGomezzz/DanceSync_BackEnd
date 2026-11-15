@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="380" viewBox="0 0 760 380" role="img" aria-labelledby="t d">
+  <title id="t">OBS-1 metrics delay per sample</title>
+  <desc id="d">p50 1.1 s, p95 4.7 s, max 5.0 s over 20 samples</desc>
+  <style>
+    svg { --surface: #fcfcfb; --text-1: #0b0b0b; --text-2: #52514e; --text-3: #6f6e69;
+          --grid: #e4e3df; --axis: #a9a8a2; --series-1: #2a78d6; --series-2: #eb6834;
+          --good: #006300; --good-fill: #e3f1e3; --bad: #b3261e; --bad-fill: #fbe9e7; --target: #0b0b0b; }
+    @media (prefers-color-scheme: dark) {
+      svg { --surface: #1a1a19; --text-1: #f0efec; --text-2: #c3c2b7; --text-3: #9d9c94;
+            --grid: #2e2e2c; --axis: #5c5b56; --series-1: #3987e5; --series-2: #d95926;
+            --good: #5fc85f; --good-fill: #1f2e1f; --bad: #f28b82; --bad-fill: #3a1f1d; --target: #f0efec; }
+    }
+    text { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; fill: var(--text-2); }
+    .title { font-size: 16px; font-weight: 600; fill: var(--text-1); }
+    .subtitle { font-size: 12px; fill: var(--text-2); }
+    .tick { font-size: 11px; fill: var(--text-3); }
+    .label { font-size: 12px; fill: var(--text-1); }
+    .detail { font-size: 11px; fill: var(--text-3); }
+    .value { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .target-label { font-size: 11px; font-weight: 600; fill: var(--text-1); }
+    .note { font-size: 11px; fill: var(--text-3); }
+  </style>
+  <rect width="760" height="380" fill="var(--surface)"/>
+  <text class="title" x="24" y="30">Delay until a new event is visible in Prometheus</text>
+  <text class="subtitle" x="24" y="52">Seconds from creating a room through the gateway until Prometheus reflects it, 20 samples (Grafana adds up to 5 s)</text>
+  <rect x="24" y="69" width="10" height="10" rx="2" fill="var(--series-1)"/>
+  <text class="label" x="40" y="78">Delay per sample</text>
+  <rect x="165.6" y="69" width="10" height="10" rx="2" fill="var(--series-2)"/>
+  <text class="label" x="181.6" y="78">p95</text>
+  <line x1="56" x2="736" y1="336" y2="336" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="340" text-anchor="end">0 s</text>
+  <line x1="56" x2="736" y1="291" y2="291" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="295" text-anchor="end">3 s</text>
+  <line x1="56" x2="736" y1="246" y2="246" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="250" text-anchor="end">6 s</text>
+  <line x1="56" x2="736" y1="201" y2="201" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="205" text-anchor="end">9 s</text>
+  <line x1="56" x2="736" y1="156" y2="156" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="160" text-anchor="end">12 s</text>
+  <line x1="56" x2="736" y1="111" y2="111" stroke="var(--grid)" stroke-width="1"/>
+  <text class="tick" x="48" y="115" text-anchor="end">15 s</text>
+  <line x1="56" x2="736" y1="111" y2="111" stroke="var(--target)" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text class="target-label" x="736" y="103" text-anchor="end">Target: visible in &lt;= 15 s</text>
+  <path d="M63,336 V319.12 Q63,315.12 67,315.12 H79 Q83,315.12 83,319.12 V336 Z" fill="var(--series-1)"><title>Sample 1: 1.4 s</title></path>
+  <text class="tick" x="73" y="352" text-anchor="middle">1</text>
+  <path d="M97,336 V335.635 Q97,331.635 101,331.635 H113 Q117,331.635 117,335.635 V336 Z" fill="var(--series-1)"><title>Sample 2: 0.3 s</title></path>
+  <text class="tick" x="107" y="352" text-anchor="middle">2</text>
+  <path d="M131,336 V333.01 Q131,329.01 135,329.01 H147 Q151,329.01 151,333.01 V336 Z" fill="var(--series-1)"><title>Sample 3: 0.5 s</title></path>
+  <text class="tick" x="141" y="352" text-anchor="middle">3</text>
+  <path d="M165,336 V326.62 Q165,322.62 169,322.62 H181 Q185,322.62 185,326.62 V336 Z" fill="var(--series-1)"><title>Sample 4: 0.9 s</title></path>
+  <text class="tick" x="175" y="352" text-anchor="middle">4</text>
+  <path d="M199,336 V265 Q199,261 203,261 H215 Q219,261 219,265 V336 Z" fill="var(--series-1)"><title>Sample 5: 5.0 s</title></path>
+  <text class="tick" x="209" y="352" text-anchor="middle">5</text>
+  <path d="M233,336 V274.09000000000003 Q233,270.09000000000003 237,270.09000000000003 H249 Q253,270.09000000000003 253,274.09000000000003 V336 Z" fill="var(--series-1)"><title>Sample 6: 4.4 s</title></path>
+  <text class="tick" x="243" y="352" text-anchor="middle">6</text>
+  <path d="M267,336 V330.055 Q267,326.055 271,326.055 H283 Q287,326.055 287,330.055 V336 Z" fill="var(--series-1)"><title>Sample 7: 0.7 s</title></path>
+  <text class="tick" x="277" y="352" text-anchor="middle">7</text>
+  <path d="M301,336 V323.32 Q301,319.32 305,319.32 H317 Q321,319.32 321,323.32 V336 Z" fill="var(--series-1)"><title>Sample 8: 1.1 s</title></path>
+  <text class="tick" x="311" y="352" text-anchor="middle">8</text>
+  <path d="M335,336 V319.645 Q335,315.645 339,315.645 H351 Q355,315.645 355,319.645 V336 Z" fill="var(--series-1)"><title>Sample 9: 1.4 s</title></path>
+  <text class="tick" x="345" y="352" text-anchor="middle">9</text>
+  <path d="M369,336 V336 Q369,332.235 372.765,332.235 H385.235 Q389,332.235 389,336 V336 Z" fill="var(--series-1)"><title>Sample 10: 0.3 s</title></path>
+  <text class="tick" x="379" y="352" text-anchor="middle">10</text>
+  <path d="M403,336 V272.83 Q403,268.83 407,268.83 H419 Q423,268.83 423,272.83 V336 Z" fill="var(--series-1)"><title>Sample 11: 4.5 s</title></path>
+  <text class="tick" x="413" y="352" text-anchor="middle">11</text>
+  <path d="M437,336 V290.455 Q437,286.455 441,286.455 H453 Q457,286.455 457,290.455 V336 Z" fill="var(--series-1)"><title>Sample 12: 3.3 s</title></path>
+  <text class="tick" x="447" y="352" text-anchor="middle">12</text>
+  <path d="M471,336 V332.875 Q471,328.875 475,328.875 H487 Q491,328.875 491,332.875 V336 Z" fill="var(--series-1)"><title>Sample 13: 0.5 s</title></path>
+  <text class="tick" x="481" y="352" text-anchor="middle">13</text>
+  <path d="M505,336 V335.71 Q505,331.71 509,331.71 H521 Q525,331.71 525,335.71 V336 Z" fill="var(--series-1)"><title>Sample 14: 0.3 s</title></path>
+  <text class="tick" x="515" y="352" text-anchor="middle">14</text>
+  <path d="M539,336 V323.185 Q539,319.185 543,319.185 H555 Q559,319.185 559,323.185 V336 Z" fill="var(--series-1)"><title>Sample 15: 1.1 s</title></path>
+  <text class="tick" x="549" y="352" text-anchor="middle">15</text>
+  <path d="M573,336 V290.155 Q573,286.155 577,286.155 H589 Q593,286.155 593,290.155 V336 Z" fill="var(--series-1)"><title>Sample 16: 3.3 s</title></path>
+  <text class="tick" x="583" y="352" text-anchor="middle">16</text>
+  <path d="M607,336 V329.83 Q607,325.83 611,325.83 H623 Q627,325.83 627,329.83 V336 Z" fill="var(--series-1)"><title>Sample 17: 0.7 s</title></path>
+  <text class="tick" x="617" y="352" text-anchor="middle">17</text>
+  <path d="M641,336 V268.915 Q641,264.915 645,264.915 H657 Q661,264.915 661,268.915 V336 Z" fill="var(--series-1)"><title>Sample 18: 4.7 s</title></path>
+  <text class="tick" x="651" y="352" text-anchor="middle">18</text>
+  <path d="M675,336 V284.185 Q675,280.185 679,280.185 H691 Q695,280.185 695,284.185 V336 Z" fill="var(--series-1)"><title>Sample 19: 3.7 s</title></path>
+  <text class="tick" x="685" y="352" text-anchor="middle">19</text>
+  <path d="M709,336 V272.455 Q709,268.455 713,268.455 H725 Q729,268.455 729,272.455 V336 Z" fill="var(--series-1)"><title>Sample 20: 4.5 s</title></path>
+  <text class="tick" x="719" y="352" text-anchor="middle">20</text>
+  <line x1="56" x2="736" y1="264.915" y2="264.915" stroke="var(--series-2)" stroke-width="1.5"/>
+  <text class="value" x="62" y="258.915">p95 4.7 s</text>
+  <line x1="56" x2="736" y1="336" y2="336" stroke="var(--axis)" stroke-width="1"/>
+  <text class="detail" x="396" y="372" text-anchor="middle">Sample</text>
+</svg>

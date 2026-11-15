@@ -144,10 +144,10 @@ Deploying them later would take two more Container Apps, and a sidecar in each b
 
 ## Verification checklist
 
-- [ ] Every log line of the three services is one JSON object with `service`, `level`, `timestamp` and, when there is one, `correlationId`.
-- [ ] A request with a known `X-Correlation-Id` through the gateway appears with that id in the gateway, battle-service and users-service logs.
-- [ ] No log line contains a token, the guest secret or the Redis password.
-- [ ] `/metrics` and `/actuator/prometheus` are not reachable through the gateway or nginx.
-- [ ] Prometheus shows every target `up`; both dashboards load from provisioned files.
-- [ ] `obs-metrics-lag`, `obs-alert-time` and `obs-trace` reports meet the three measures.
+- [x] Every log line of the three services is one JSON object with `service`, `level`, `timestamp` and, when there is one, `correlationId`. Exceptions, as decided: the gateway's audit lines (format kept) and the JVM's `Picked up JAVA_TOOL_OPTIONS` banner, printed before logging starts.
+- [x] A request with a known `X-Correlation-Id` through the gateway appears with that id in the gateway, battle-service and users-service logs (`obs-trace`).
+- [x] No log line contains a token, the guest secret or the Redis password (checked on the logs of the OBS-1 runs; the local Redis has no password).
+- [x] `/metrics` and `/actuator/prometheus` are not reachable through the gateway (401) or nginx (404).
+- [x] Prometheus shows every target `up`; both dashboards load from provisioned files.
+- [x] `obs-metrics-lag`, `obs-alert-time` and `obs-trace` reports meet the three measures (see [OBS-1](../quality/OBS-1-observabilidad.md)).
 - [ ] Existing tests still pass (battle-service with and without `TEST_REDIS_URL`, both Java services).

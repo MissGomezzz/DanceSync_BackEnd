@@ -1,0 +1,425 @@
+{
+  "scenario": "OBS-1 trace: one correlation id through api-gateway, battle-service and users-service",
+  "startedAt": "2026-11-15T20:54:56.314Z",
+  "finishedAt": "2026-11-15T20:56:36.333Z",
+  "correlationId": "obs1-trace-1794776096314",
+  "roomCode": "K97TME",
+  "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+  "gatewayEchoedId": "obs1-trace-1794776096314, obs1-trace-1794776096314",
+  "services": {
+    "api-gateway": 4,
+    "battle-service": 25,
+    "battle-1": 16,
+    "battle-2": 9,
+    "users-service": 2
+  },
+  "usersServiceLineNamesBattle": true,
+  "allLinesJson": true,
+  "pass": true,
+  "lines": [
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.080Z",
+      "message": "HTTP request",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "method": "POST",
+        "route": "/api/rooms",
+        "path": "/api/rooms",
+        "status": 201,
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "api-gateway",
+      "timestamp": "2026-11-15T20:54:57.099256088Z",
+      "message": "HTTP request",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "method": "POST",
+        "route": "battle-service-http",
+        "path": "/api/rooms",
+        "status": 201,
+        "level": "INFO"
+      }
+    },
+    {
+      "service": "battle-2",
+      "timestamp": "2026-11-15T20:54:57.158Z",
+      "message": "HTTP request",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "method": "POST",
+        "route": "/api/rooms/:code/guest-token",
+        "path": "/api/rooms/K97TME/guest-token",
+        "status": 201,
+        "instance": "6c700554fee7",
+        "level": "info"
+      }
+    },
+    {
+      "service": "api-gateway",
+      "timestamp": "2026-11-15T20:54:57.163549014Z",
+      "message": "HTTP request",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "method": "POST",
+        "route": "battle-service-http",
+        "path": "/api/rooms/K97TME/guest-token",
+        "status": 201,
+        "level": "INFO"
+      }
+    },
+    {
+      "service": "api-gateway",
+      "timestamp": "2026-11-15T20:54:57.252378812Z",
+      "message": "HTTP request",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "method": "GET",
+        "route": "battle-service-socket-ws",
+        "path": "/socket.io/",
+        "status": 200,
+        "level": "INFO"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.310Z",
+      "message": "Socket connected",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.324Z",
+      "message": "Socket event handled",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "event": "room:join",
+        "roomId": "K97TME",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "api-gateway",
+      "timestamp": "2026-11-15T20:54:57.343395966Z",
+      "message": "HTTP request",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "method": "GET",
+        "route": "battle-service-socket-ws",
+        "path": "/socket.io/",
+        "status": 200,
+        "level": "INFO"
+      }
+    },
+    {
+      "service": "battle-2",
+      "timestamp": "2026-11-15T20:54:57.366Z",
+      "message": "Socket connected",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "instance": "6c700554fee7",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-2",
+      "timestamp": "2026-11-15T20:54:57.377Z",
+      "message": "Socket event handled",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "event": "room:join",
+        "roomId": "K97TME",
+        "instance": "6c700554fee7",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.385Z",
+      "message": "Socket event handled",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "event": "role:select",
+        "roomId": "K97TME",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-2",
+      "timestamp": "2026-11-15T20:54:57.392Z",
+      "message": "Socket event handled",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "event": "role:select",
+        "roomId": "K97TME",
+        "instance": "6c700554fee7",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.400Z",
+      "message": "Socket event handled",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "event": "player:ready",
+        "roomId": "K97TME",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-2",
+      "timestamp": "2026-11-15T20:54:57.406Z",
+      "message": "Socket event handled",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "event": "player:ready",
+        "roomId": "K97TME",
+        "instance": "6c700554fee7",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.414Z",
+      "message": "Socket event handled",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "event": "song-challenge:start",
+        "roomId": "K97TME",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.425Z",
+      "message": "Socket event handled",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "event": "song-challenge:submit",
+        "roomId": "K97TME",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.432Z",
+      "message": "Battle started",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.438Z",
+      "message": "Socket event handled",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "event": "song:choose",
+        "roomId": "K97TME",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:54:57.444Z",
+      "message": "Word race planned",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:55:28.032Z",
+      "message": "Word round opened",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-2",
+      "timestamp": "2026-11-15T20:55:38.032Z",
+      "message": "Word round ended",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "6c700554fee7",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:55:41.643Z",
+      "message": "Word round opened",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-2",
+      "timestamp": "2026-11-15T20:55:51.648Z",
+      "message": "Word round ended",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "6c700554fee7",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:55:57.699Z",
+      "message": "Word round opened",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-2",
+      "timestamp": "2026-11-15T20:56:07.700Z",
+      "message": "Word round ended",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "6c700554fee7",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:56:32.434Z",
+      "message": "Battle finished",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-2",
+      "timestamp": "2026-11-15T20:56:32.452Z",
+      "message": "Socket disconnected",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "instance": "6c700554fee7",
+        "level": "info"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:56:32.459Z",
+      "message": "Socket disconnected",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    },
+    {
+      "service": "users-service",
+      "timestamp": "2026-11-15T20:56:33.047142053Z",
+      "message": "Match stored",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "level": "INFO"
+      }
+    },
+    {
+      "service": "users-service",
+      "timestamp": "2026-11-15T20:56:33.076448152Z",
+      "message": "HTTP request",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "method": "PUT",
+        "route": "/api/matches/{id}",
+        "path": "/api/matches/14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "status": 200,
+        "level": "INFO"
+      }
+    },
+    {
+      "service": "battle-1",
+      "timestamp": "2026-11-15T20:56:33.079Z",
+      "message": "Match stored in the match history",
+      "json": true,
+      "fields": {
+        "correlationId": "obs1-trace-1794776096314",
+        "roomId": "K97TME",
+        "battleId": "14da690c-be9a-45ed-82a9-1b5c920d80bb",
+        "instance": "8715951fcb88",
+        "level": "info"
+      }
+    }
+  ]
+}

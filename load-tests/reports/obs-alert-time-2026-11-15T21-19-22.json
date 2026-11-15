@@ -1,0 +1,233 @@
+{
+  "scenario": "OBS-1 alert time: degradation under load until the Prometheus alert is firing",
+  "startedAt": "2026-11-15T21:03:46.529Z",
+  "finishedAt": "2026-11-15T21:19:22.134Z",
+  "setup": {
+    "load": {
+      "rooms": 8,
+      "roomSize": 7,
+      "roomsBattlingAtStart": 8,
+      "baselineConnections": 56,
+      "battlesFinished": 67,
+      "setupErrors": [],
+      "cycleErrors": 8
+    },
+    "prometheus": "scrape and evaluation every 5 s, scrape timeout 3 s; rules with for: 15s (observability/prometheus/alert-rules.yml)",
+    "latencyMode": "Redis DEBUG SLEEP 0.4 s in a loop (50 ms awake between sleeps)",
+    "pollMs": 250,
+    "machine": {
+      "platform": "win32 10.0.26200",
+      "cpus": 8,
+      "memoryGb": 16
+    }
+  },
+  "replicaDown": {
+    "alert": "BattleReplicaDown",
+    "runs": [
+      {
+        "run": 1,
+        "victim": "battle-1",
+        "killedAt": "2026-11-15T21:04:11.404Z",
+        "openConnectionsAtKill": 56,
+        "fired": true,
+        "timeToFireMs": 24486,
+        "pendingSeenAfterMs": 9454,
+        "prometheusActiveAfterMs": 4388,
+        "labels": {
+          "alertname": "BattleReplicaDown",
+          "instance": "battle-1",
+          "job": "battle-service",
+          "severity": "critical"
+        },
+        "value": 0,
+        "replicaBackHealthy": true,
+        "alertResolvedAfterRestart": true
+      },
+      {
+        "run": 2,
+        "victim": "battle-2",
+        "killedAt": "2026-11-15T21:04:46.672Z",
+        "openConnectionsAtKill": 56,
+        "fired": true,
+        "timeToFireMs": 24063,
+        "pendingSeenAfterMs": 9175,
+        "prometheusActiveAfterMs": 4120,
+        "labels": {
+          "alertname": "BattleReplicaDown",
+          "instance": "battle-2",
+          "job": "battle-service",
+          "severity": "critical"
+        },
+        "value": 0,
+        "replicaBackHealthy": true,
+        "alertResolvedAfterRestart": true
+      },
+      {
+        "run": 3,
+        "victim": "battle-1",
+        "killedAt": "2026-11-15T21:05:27.370Z",
+        "openConnectionsAtKill": 56,
+        "fired": true,
+        "timeToFireMs": 23492,
+        "pendingSeenAfterMs": 8424,
+        "prometheusActiveAfterMs": 3422,
+        "labels": {
+          "alertname": "BattleReplicaDown",
+          "instance": "battle-1",
+          "job": "battle-service",
+          "severity": "critical"
+        },
+        "value": 0,
+        "replicaBackHealthy": true,
+        "alertResolvedAfterRestart": true
+      },
+      {
+        "run": 4,
+        "victim": "battle-2",
+        "killedAt": "2026-11-15T21:06:01.917Z",
+        "openConnectionsAtKill": 56,
+        "fired": true,
+        "timeToFireMs": 23978,
+        "pendingSeenAfterMs": 8974,
+        "prometheusActiveAfterMs": 3875,
+        "labels": {
+          "alertname": "BattleReplicaDown",
+          "instance": "battle-2",
+          "job": "battle-service",
+          "severity": "critical"
+        },
+        "value": 0,
+        "replicaBackHealthy": true,
+        "alertResolvedAfterRestart": true
+      },
+      {
+        "run": 5,
+        "victim": "battle-1",
+        "killedAt": "2026-11-15T21:06:42.390Z",
+        "openConnectionsAtKill": 56,
+        "fired": true,
+        "timeToFireMs": 23487,
+        "pendingSeenAfterMs": 8468,
+        "prometheusActiveAfterMs": 3402,
+        "labels": {
+          "alertname": "BattleReplicaDown",
+          "instance": "battle-1",
+          "job": "battle-service",
+          "severity": "critical"
+        },
+        "value": 0,
+        "replicaBackHealthy": true,
+        "alertResolvedAfterRestart": true
+      }
+    ],
+    "fired": 5,
+    "minMs": 23487,
+    "p50Ms": 23978,
+    "maxMs": 24486,
+    "targetMs": 60000,
+    "meetsTarget": true,
+    "runCount": 5
+  },
+  "latency": {
+    "alert": "HighRealtimeLatency",
+    "runs": [
+      {
+        "run": 1,
+        "mode": "redis",
+        "degraded": "redis",
+        "degradedAt": "2026-11-15T21:07:16.483Z",
+        "openConnectionsAtStart": 56,
+        "fired": true,
+        "timeToFireMs": 28199,
+        "pendingSeenAfterMs": 13248,
+        "prometheusActiveAfterMs": 8203,
+        "labels": {
+          "alertname": "HighRealtimeLatency",
+          "instance": "battle-2",
+          "severity": "warning"
+        },
+        "value": 0.46778453128039865,
+        "alertResolvedAfterRestore": true
+      },
+      {
+        "run": 2,
+        "mode": "redis",
+        "degraded": "redis",
+        "degradedAt": "2026-11-15T21:08:15.092Z",
+        "openConnectionsAtStart": 56,
+        "fired": true,
+        "timeToFireMs": 29706,
+        "pendingSeenAfterMs": 14649,
+        "prometheusActiveAfterMs": 9594,
+        "labels": {
+          "alertname": "HighRealtimeLatency",
+          "instance": "battle-2",
+          "severity": "warning"
+        },
+        "value": 0.49331967213114747,
+        "alertResolvedAfterRestore": true
+      },
+      {
+        "run": 3,
+        "mode": "redis",
+        "degraded": "redis",
+        "degradedAt": "2026-11-15T21:09:20.207Z",
+        "openConnectionsAtStart": 56,
+        "fired": true,
+        "timeToFireMs": 29500,
+        "pendingSeenAfterMs": 14591,
+        "prometheusActiveAfterMs": 9479,
+        "labels": {
+          "alertname": "HighRealtimeLatency",
+          "instance": "battle-2",
+          "severity": "warning"
+        },
+        "value": 0.4737019230769231,
+        "alertResolvedAfterRestore": true
+      },
+      {
+        "run": 4,
+        "mode": "redis",
+        "degraded": "redis",
+        "degradedAt": "2026-11-15T21:10:20.129Z",
+        "openConnectionsAtStart": 56,
+        "fired": true,
+        "timeToFireMs": 29411,
+        "pendingSeenAfterMs": 14618,
+        "prometheusActiveAfterMs": 9557,
+        "labels": {
+          "alertname": "HighRealtimeLatency",
+          "instance": "battle-2",
+          "severity": "warning"
+        },
+        "value": 0.4832894736842105,
+        "alertResolvedAfterRestore": true
+      },
+      {
+        "run": 5,
+        "mode": "redis",
+        "degraded": "redis",
+        "degradedAt": "2026-11-15T21:11:19.954Z",
+        "openConnectionsAtStart": 56,
+        "fired": true,
+        "timeToFireMs": 29715,
+        "pendingSeenAfterMs": 14596,
+        "prometheusActiveAfterMs": 9732,
+        "labels": {
+          "alertname": "HighRealtimeLatency",
+          "instance": "battle-2",
+          "severity": "warning"
+        },
+        "value": 0.46893401015228425,
+        "alertResolvedAfterRestore": true
+      }
+    ],
+    "fired": 5,
+    "minMs": 28199,
+    "p50Ms": 29500,
+    "maxMs": 29715,
+    "targetMs": 60000,
+    "meetsTarget": true,
+    "runCount": 5
+  }
+}
