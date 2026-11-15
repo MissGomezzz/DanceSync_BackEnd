@@ -54,7 +54,7 @@ services:
     environment:
       POSTGRES_DB: dancesync
       POSTGRES_USER: dancesync
-      POSTGRES_PASSWORD: dancesync
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dancesync}
     # Throwaway data: gone when the container is removed.
     tmpfs:
       - /var/lib/postgresql/data
@@ -97,7 +97,7 @@ services:
       POSTGRES_PORT: "5432"
       POSTGRES_DB: dancesync
       POSTGRES_USER: dancesync
-      POSTGRES_PASSWORD: dancesync
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dancesync}
       MANAGEMENT_PORT: "9081"
     depends_on:
       postgres:
@@ -151,7 +151,7 @@ services:
   postgres-exporter:
     image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
     environment:
-      DATA_SOURCE_NAME: postgresql://dancesync:dancesync@postgres:5432/dancesync?sslmode=disable
+      DATA_SOURCE_NAME: postgresql://dancesync:${POSTGRES_PASSWORD:-dancesync}@postgres:5432/dancesync?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy

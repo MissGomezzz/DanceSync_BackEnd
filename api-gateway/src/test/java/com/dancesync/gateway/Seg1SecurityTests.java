@@ -271,7 +271,7 @@ class Seg1SecurityTests {
                 + "\"path\":\"" + MATCH_HISTORY + "\"}"), "the refusal is not in the log");
         assertFalse(log.contains(token), "the token was logged");
         // Not even its parts, and nothing else the caller sent.
-        for (String part : token.split("\\.")) assertFalse(log.contains(part), "a part of the token was logged");
+        for (String part : java.util.Objects.requireNonNull(token).split("\\.")) assertFalse(log.contains(part), "a part of the token was logged");
         assertFalse(log.contains("in-the-query"), "the query string was logged");
     }
 
@@ -279,7 +279,7 @@ class Seg1SecurityTests {
     @DisplayName("The correlation id is created when missing, replaced when unsafe and forwarded downstream")
     void correlationIdIsCreatedSanitizedAndForwarded(CapturedOutput output) throws Exception {
         HttpResponse<String> generated = send("GET", MATCH_HISTORY, null);
-        String correlationId = generated.headers().firstValue("X-Correlation-Id").orElse(null);
+        String correlationId = generated.headers().firstValue("X-Correlation-Id").orElseThrow();
         assertNotNull(correlationId);
         assertTrue(correlationId.matches("[0-9a-f-]{36}"), correlationId);
         assertTrue(output.getAll().contains("\"correlationId\":\"" + correlationId + "\""));
