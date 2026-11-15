@@ -1,0 +1,53 @@
+{
+  "scenario": "nominal",
+  "label": "base-seg3-a",
+  "target": "http://localhost:8088",
+  "replicas": 2,
+  "cpusPerReplica": 0.5,
+  "startedAt": "2026-11-15T05:00:21.503Z",
+  "endedAt": "2026-11-15T05:12:39.438Z",
+  "resources": {
+    "host (todos los núcleos)": {
+      "maxCpu": 42.4,
+      "avgCpu": 30.8,
+      "maxMemMiB": 18963,
+      "samples": 146
+    },
+    "dancesync-lb": {
+      "maxCpu": 11.9,
+      "avgCpu": 6.7,
+      "maxMemMiB": 65,
+      "samples": 145
+    },
+    "dancesync-battle-2": {
+      "maxCpu": 46,
+      "avgCpu": 17.6,
+      "maxMemMiB": 60,
+      "samples": 145
+    },
+    "dancesync-battle-1": {
+      "maxCpu": 48.8,
+      "avgCpu": 18.8,
+      "maxMemMiB": 62,
+      "samples": 145
+    },
+    "dancesync-scale-redis-1": {
+      "maxCpu": 12.2,
+      "avgCpu": 5.8,
+      "maxMemMiB": 9,
+      "samples": 145
+    },
+    "dancesync-scale-fake-entra-1": {
+      "maxCpu": 29.4,
+      "avgCpu": 8.7,
+      "maxMemMiB": 31,
+      "samples": 145
+    },
+    "dancesync-postgres": {
+      "maxCpu": 7.5,
+      "avgCpu": 0.7,
+      "maxMemMiB": 35,
+      "samples": 145
+    }
+  }
+}

@@ -1,0 +1,23 @@
+# SEG-3, prueba corta (~2 min): 3 salas y 2 clientes abusivos durante 45 s.
+# Sirve para comprobar el entorno antes de la prueba larga.
+config:
+  target: "http://localhost:8080"
+  processor: "../lib/room-bot.cjs"
+  phases:
+    - { name: "salas", duration: 5, arrivalCount: 3 }
+    - { name: "espera", pause: 10 }
+    - { name: "ataque", duration: 2, arrivalCount: 2 }
+  variables:
+    totalS: [60]
+    roomSize: [7]
+    eventEveryMs: [2000]
+    # SEG-3: tramo de la prueba (en segundos) cuyas latencias se registran aparte para comparar con y sin ataque.
+    windowFromS: [20]
+    windowToS: [55]
+    rooms: [3]
+    abuseEventsPerSecond: [200]
+    abuseDurationS: [45]
+scenarios:
+  - name: "salas normales y clientes abusivos"
+    flow:
+      - function: "runMixed"

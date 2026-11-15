@@ -1,5 +1,6 @@
 package com.dancesync.gateway.security;
 
+import com.dancesync.gateway.ratelimit.HttpRateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -10,6 +11,7 @@ import org.springframework.security.authentication.ReactiveAuthenticationManager
 import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.authorization.AuthorizationResult;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
+import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -85,7 +87,7 @@ public class SecurityConfig {
 
     @Bean
     SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http, AuthProperties properties,
-                                                  AuthRejectionHandler rejections) {
+                                                  AuthRejectionHandler rejections, HttpRateLimiter rateLimiter) {
         JwtIssuerReactiveAuthenticationManagerResolver tokens = authenticationManagers(properties);
         return http
                 // Stateless API authenticated by bearer tokens: no session, no cookies, so no CSRF surface.
@@ -95,6 +97,9 @@ public class SecurityConfig {
                 .logout(ServerHttpSecurity.LogoutSpec::disable)
                 .securityContextRepository(NoOpServerSecurityContextRepository.getInstance())
                 .cors(cors -> cors.configurationSource(corsConfigurationSource(properties)))
+                // SEG-3: per-address rate limit after CORS (a 429 stays readable by the browser) and
+                // before authentication (a flood of forged tokens never reaches signature checks).
+                .addFilterBefore(rateLimiter::filter, SecurityWebFiltersOrder.AUTHENTICATION)
                 .authorizeExchange(exchanges -> exchanges
                         .pathMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .pathMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**",

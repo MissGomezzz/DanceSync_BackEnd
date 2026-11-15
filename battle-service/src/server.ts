@@ -19,7 +19,6 @@ import { entraRemoteKeys, JwtGuestTokenIssuer, JwtTokenVerifier } from "./infras
 import { createHandshakeAuth } from "./infrastructure/ws/handshakeAuth.js";
 import { HttpMatchResultPublisher } from "./infrastructure/http/HttpMatchResultPublisher.js";
 import { buildRouter, errorHandler } from "./infrastructure/http/routes.js";
-import { InMemoryRoomRepository } from "./infrastructure/persistence/InMemoryRoomRepository.js";
 import { registerSocketHandlers, type BattleServer } from "./infrastructure/ws/socketHandlers.js";
 import { SelectRole } from "./application/usecases/SelectRole.js";
 import { AwardWordBonus } from "./application/usecases/AwardWordBonus.js";
@@ -33,13 +32,18 @@ import { ExpireWordRound } from "./application/usecases/ExpireWordRound.js";
 import { StopWordRace } from "./application/usecases/StopWordRace.js";
 import { SubmitWord } from "./application/usecases/SubmitWord.js";
 import { GetActiveWordRound } from "./application/usecases/GetActiveWordRound.js";
-import { InMemoryWordRaceRepository } from "./infrastructure/persistence/InMemoryWordRaceRepository.js";
+import { createStateStores } from "./infrastructure/redis/stateStores.js";
+import { loadAbuseConfig } from "./infrastructure/abuse/abuseConfig.js";
+import { consoleAbuseAudit } from "./infrastructure/abuse/abuseAudit.js";
+import { attachAbuseProtection } from "./infrastructure/abuse/abuseProtection.js";
 import { WordRaceScheduler } from "./infrastructure/scheduling/WordRaceScheduler.js";
 import { createSocketWordRaceBroadcaster } from "./infrastructure/ws/wordRaceMessages.js";
 
 // Wiring: adapters -> use cases -> entry points.
-const rooms = new InMemoryRoomRepository();
-const wordRaces = new InMemoryWordRaceRepository();
+// REDIS_URL set: room and word race state in Redis (several instances). Not set: in memory, as before.
+const stateStores = createStateStores();
+const rooms = stateStores.rooms;
+const wordRaces = stateStores.wordRaces;
 const createRoom = new CreateRoom(rooms);
 const joinRoom = new JoinRoom(rooms);
 const battleTiming = {
@@ -91,6 +95,7 @@ const io: BattleServer = new Server(httpServer, {
   path: "/socket.io",
   cors: { origin: env.corsOrigin, credentials: true },
 });
+stateStores.attachAdapter(io);
 const wordRaceScheduler = new WordRaceScheduler({
   startWordRace: new StartWordRace(rooms, wordRaces, {
     rounds: env.wordRaceRounds,
@@ -130,6 +135,10 @@ const socketHandlers = registerSocketHandlers(io, {
     getActiveWordRound: new GetActiveWordRound(wordRaces),
   },
 });
+// SEG-3: after the handshake authentication, so the block check knows who connects.
+// Every event goes through a token bucket before any handler; clients that keep
+// flooding are blocked (shared through Redis when REDIS_URL is set) and disconnected.
+attachAbuseProtection(io, { config: loadAbuseConfig(), blocks: stateStores.blocks, audit: consoleAbuseAudit });
 
 // HTTP routes go after the socket handlers so a created room can be watched:
 // if its host never connects, the room is reaped instead of living forever.
@@ -156,7 +165,9 @@ function shutdown(signal: string): void {
   console.log(`${signal} received, shutting down battle-service`);
   socketHandlers.close();
   io.close();
-  httpServer.close(() => process.exit(0));
+  httpServer.close(() => {
+    void stateStores.close().finally(() => process.exit(0));
+  });
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

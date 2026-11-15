@@ -8,8 +8,9 @@ Backend monorepo for **DanceSync**, a Just-Dance-style web app. Up to 7 users jo
 |---|---|---|---|
 | `api-gateway` | Spring Boot 4.1.1, Spring Cloud Gateway (reactive/WebFlux), Java 17 | 8080 | Single entry point for the frontend; routes HTTP and WebSocket traffic, applies CORS |
 | `users-service` | Spring Boot 4.1.1, Spring Web MVC, Spring Data JPA, Flyway, PostgreSQL, Java 17 | 8081 | User profiles and match history |
-| `battle-service` | Node 22, Express 5, TypeScript, Socket.IO 4 | 3000 | Rooms, real-time battles, spectator chat, votes and live scoring (in-memory) |
+| `battle-service` | Node 22, Express 5, TypeScript, Socket.IO 4 | 3000 | Rooms, real-time battles, spectator chat, votes and live scoring (state in memory, or in Redis with `REDIS_URL` so several replicas can share it) |
 | `postgres` | PostgreSQL 16 (Docker) | 5432 | Persistence for `users-service` |
+| `redis` | Redis 7 (Docker, optional) | 6379 | Shared room and word race state, and the Socket.IO adapter between `battle-service` replicas (see [Scaling and performance](#scaling-and-performance-ren-1)) |
 
 ## Architecture
 
@@ -38,7 +39,7 @@ Backend monorepo for **DanceSync**, a Just-Dance-style web app. Up to 7 users jo
           +------------------+
 ```
 
-Both Java services and the Node service follow a hexagonal layout: `domain` (models, ports, rules) has no framework dependencies, `application` holds the use cases, and `infrastructure` contains the inbound (REST, WebSocket) and outbound (JPA, in-memory) adapters.
+Both Java services and the Node service follow a hexagonal layout: `domain` (models, ports, rules) has no framework dependencies, `application` holds the use cases, and `infrastructure` contains the inbound (REST, WebSocket) and outbound (JPA, in-memory, Redis) adapters.
 
 ## Prerequisites
 
@@ -134,6 +135,16 @@ Defaults live in `.env.example`; every service falls back to the same values whe
 | `WORD_RACE_ROUNDS` / `WORD_RACE_WINDOW_MS` | `3` / `10000` | battle-service (whole number `0` or more / `> 0`; word race rounds per battle, time to type each word) |
 | `WORD_BONUS_POINTS` | `1` | battle-service (positive whole number; points for each word round won, added to the battle score) |
 | `WORD_RACE_MIN_GAP_MS` / `WORD_RACE_FALLBACK_DURATION_MS` | `12000` / `90000` | battle-service (`0` or more / `> 0`; time between round openings, song length when there is no song, used for the word race and the automatic battle end) |
+| `REDIS_URL` | empty | battle-service (`redis://` or `rediss://`; empty = room and word race state in memory, a single instance; set = state in Redis plus the Socket.IO Redis adapter, so several instances can serve the same rooms) |
+| `REDIS_STATE_TTL_SECONDS` | `86400` | battle-service (positive whole number; a room or word race key that is never touched again expires after this long) |
+| `REDIS_UPDATE_MAX_ATTEMPTS` | `12` | battle-service (positive whole number; attempts of an optimistic room update that keeps losing the race before giving up) |
+| `SOCKETIO_REDIS_KEY` | `dancesync` | battle-service (prefix of the Socket.IO adapter channels; every instance of one deployment must share it) |
+| `RATE_LIMIT_EVENTS_PER_SECOND` / `RATE_LIMIT_EVENT_BURST` | `20` / `40` | battle-service (SEG-3; token bucket of each Socket.IO connection) |
+| `RATE_LIMIT_STRIKE_THRESHOLD` / `RATE_LIMIT_STRIKE_WINDOW_SECONDS` / `RATE_LIMIT_BLOCK_SECONDS` | `40` / `10` / `30` | battle-service (SEG-3; more than the threshold of dropped events within the window blocks the client for that long) |
+| `TRUSTED_PROXY_HOPS` | `0` | battle-service, api-gateway (SEG-3; proxies in front of the service whose `X-Forwarded-For` entry is trusted to find the client's address) |
+| `RATE_LIMIT_ENABLED` | `true` | api-gateway (SEG-3; HTTP rate limit per client address) |
+| `RATE_LIMIT_<POLICY>_PER_SECOND` / `_BURST` | see `.env.example` | api-gateway (SEG-3; policies `ROOM_CREATE`, `GUEST_TOKEN`, `SOCKET_HANDSHAKE`, `SOCKET_POLLING`, `OTHER`) |
+| `REDIS_URL` (api-gateway) | empty | api-gateway (SEG-3; shared rate limit buckets; empty = this instance's memory) |
 
 `battle-service` reads its own `battle-service/.env` (see `battle-service/.env.example`). `RATING_GRACE_MS` no longer exists: a battle ends exactly when the song clip ends. `USERS_SERVICE_URL` is also where battle-service stores finished matches (`PUT /api/matches/{battleId}`, service to service).
 
@@ -152,7 +163,7 @@ The images do not run the tests: CI does, and only commits that passed CI are de
 
 - `api-gateway`: `./mvnw -B verify`
 - `users-service`: `./mvnw -B verify` against a PostgreSQL 16 service container
-- `battle-service`: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build`
+- `battle-service`: `pnpm install --frozen-lockfile`, `pnpm typecheck`, `pnpm test`, `pnpm build`, with a Redis 7 service container and `TEST_REDIS_URL`, so the shared-state tests run too
 
 ## CD (Azure Container Apps)
 
@@ -293,8 +304,8 @@ Rooms hold at most 7 players. Display names are trimmed, 1-32 characters, and un
 
 | Operation | SQL | Redis |
 |---|---|---|
-| `update` | `SELECT data, version FROM rooms WHERE code = $1`, run `mutate`, then `UPDATE rooms SET data = $1, version = version + 1 WHERE code = $2 AND version = $3`; `rowCount 0` = someone else wrote first: re-read and run `mutate` again (bounded, e.g. 5 attempts with jittered backoff) | `WATCH room:{code}`, `GET`, run `mutate`, `MULTI` / `SET` / `EXEC`; a nil `EXEC` is the conflict, retried the same way |
-| `insert` | `INSERT ... ON CONFLICT DO NOTHING` (`rowCount 1` = stored) | `SET room:{code} <json> NX` |
+| `update` | `SELECT data, version FROM rooms WHERE code = $1`, run `mutate`, then `UPDATE rooms SET data = $1, version = version + 1 WHERE code = $2 AND version = $3`; `rowCount 0` = someone else wrote first: re-read and run `mutate` again (bounded, e.g. 5 attempts with jittered backoff) | **Implemented** (`RedisRoomRepository`): `HMGET room:{CODE} data version`, run `mutate`, then a Lua script writes only if `version` is unchanged; `0` = the conflict, re-read and run `mutate` again (up to `REDIS_UPDATE_MAX_ATTEMPTS`, jittered pause). Lua instead of `WATCH`/`MULTI` because `WATCH` is tied to a connection and the repository shares one; the guarantee is the same |
+| `insert` | `INSERT ... ON CONFLICT DO NOTHING` (`rowCount 1` = stored) | **Implemented**: Lua script that writes only if the key does not exist |
 
 `InMemoryRoomRepository.update` reads, runs `mutate`, checks the version and writes in one synchronous block (no `await` in between), so concurrent updates are serialized and never conflict; it still refuses a state derived from an older version (the read -> save misuse). Rooms are stored and handed out as copies.
 
@@ -304,20 +315,43 @@ Rooms hold at most 7 players. Display names are trimmed, 1-32 characters, and un
 
 | Operation | Redis | SQL |
 |---|---|---|
-| `claimRound` | `SET word:{room}:{round}:winner <playerId> NX PX <ttl>` (`OK` = you won), or a Lua script that also bumps the tally | `UPDATE word_rounds SET winner_id = $1, status = 'won' WHERE id = $2 AND status = 'open' AND winner_id IS NULL AND closes_at > now()`; `rowCount === 1` = you won |
-| `expireRound` | Lua script that expires only when the winner key is absent | `UPDATE word_rounds SET status = 'expired' WHERE id = $1 AND status = 'open' AND winner_id IS NULL AND closes_at <= now()` |
+| `claimRound` | **Implemented** (`RedisWordRaceRepository`): one hash `wordrace:{CODE}` per race and a Lua script that checks status, winner and `closesAt` and, in the same step, stores the winner and bumps the tally | `UPDATE word_rounds SET winner_id = $1, status = 'won' WHERE id = $2 AND status = 'open' AND winner_id IS NULL AND closes_at > now()`; `rowCount === 1` = you won |
+| `expireRound` | **Implemented**: the complementary Lua script (open, no winner, at or after `closesAt`) | `UPDATE word_rounds SET status = 'expired' WHERE id = $1 AND status = 'open' AND winner_id IS NULL AND closes_at <= now()` |
 
-`InMemoryWordRaceRepository` implements each CAS as one synchronous block, the in-memory equivalent of the Lua script or the conditional `UPDATE`.
+`InMemoryWordRaceRepository` implements each CAS as one synchronous block, the in-memory equivalent of the Lua script or the conditional `UPDATE`. With `REDIS_URL` set, `RedisRoomRepository` and `RedisWordRaceRepository` (`src/infrastructure/redis`) replace both in-memory stores; nothing in `domain` or `application` changed.
 
 **Tests.** The concurrency tests slow the stores down with a random 0-5 ms delay per call (like a network round trip) so concurrent commands genuinely interleave, and each one has a negative control running the naive read -> save version through the same slow store to show the test can catch the bug:
 
 - `test/room.concurrency.test.ts`: 50 spectators voting and changing their votes at the same time (cast, move, sometimes withdraw; about 120 writes) end with exactly each spectator's last choice in the totals and the standings, 10 iterations; 100 dancers typing the right phrase at once produce exactly one chooser while the rest get `SONG_SELECTION_NOT_ACTIVE`. Both also run against a stand-in for SQL/Redis that implements `update` with the version compare-and-set and retries above (it logs how many conflicts it retried). The negative controls lose votes and crown several dancers.
 - `test/roomConcurrency.socket.test.ts`: over real sockets, back-to-back vote changes from one socket, a full room voting in bursts at once, and `role:select` immediately followed by `battle:start`.
 - `test/wordRace.concurrency.test.ts`: 100 simultaneous correct words, 50 times, give exactly one `won` and 99 `late`; a claim racing the expiry takes effect exactly once.
+- `test/stateStores.contract.test.ts`: the same contract for the in-memory and the Redis implementations of both ports (concurrent joins that provoke real optimistic-lock conflicts and lose nothing, 100 simultaneous claims with one winner, claim against expiry).
+- `test/twoReplicas.socket.test.ts`: two battle-service instances sharing one Redis play a whole battle with the players split between them (broadcasts cross instances, one winner per round, each round end seen once, wins scored once). Its negative control is removing the adapter: the test then fails.
+
+The Redis tests run only when `TEST_REDIS_URL` points to a disposable Redis (`docker run --rm -p 6379:6379 redis:7`, then `TEST_REDIS_URL=redis://localhost:6379 pnpm test`); they touch only their own keys. Without it they are skipped. CI provides one, so they run on every pull request.
 
 Run them with `pnpm test` (all tests) or, for example, `npx tsx --test test/room.concurrency.test.ts`.
 
 The `webrtc:*` events are a thin signaling relay for the dancers' live cameras (media flows peer to peer, never through the server). The server only checks that the sender joined that room as `playerId`/`from` and that `to` is connected to the same room; otherwise the ack returns `{ ok: false }` and nothing is relayed. Each socket also joins a `player:<playerId>` channel on `room:join` so signals can target a single player.
+
+## Scaling and performance (REN-1)
+
+Quality scenario REN-1 is documented, with its results and evidence, in [docs/quality/REN-1-rendimiento-latencia.md](docs/quality/REN-1-rendimiento-latencia.md); the decisions behind it are [ADR-01](docs/adr/ADR-01-estado-en-redis.md) and [ADR-02](docs/adr/ADR-02-balanceador-solo-websocket.md). In short:
+
+- **Several replicas.** With `REDIS_URL`, the room and word race state lives in Redis and the Socket.IO Redis adapter carries broadcasts between replicas, so any replica can serve any connection and no session affinity is needed (clients connect over WebSocket from the start and fall back to long-polling only when WebSocket is unavailable).
+- **Scale environment.** [`docker-compose.scale.yml`](docker-compose.scale.yml) starts Redis, two replicas with the same CPU and memory limit (`BATTLE_CPUS`, `BATTLE_MEMORY`), nginx as the load balancer on `http://localhost:8088` (`LB_REPLICAS=1` or `2` replicas receive traffic) and a fake Entra ID used only by the load tests.
+- **Load tests.** [`load-tests/`](load-tests/README.md) (Artillery) plays complete 7-player rooms and measures latency from the client: nominal load (140 users, 10 min) and a stress ramp to compare 1 and 2 replicas.
+- **Results.** 140 users with 2 replicas: chat p95 16.9 ms, vote p95 29.7 ms, 0 errors (target p95 <= 300 ms, < 1 % errors). Stress, 0.5 CPU per replica: 1 replica sustains 238 users and 2 replicas 427 (x1.79) at p95 <= 300 ms, with no duplicated or lost scores even when saturated.
+
+## Abuse and denial-of-service protection (SEG-3)
+
+Quality scenario SEG-3 is documented, with its tests and evidence, in [docs/quality/SEG-3-proteccion-abuso.md](docs/quality/SEG-3-proteccion-abuso.md); the decision behind it is [ADR-05](docs/adr/ADR-05-limite-eventos-y-http.md). In short:
+
+- **battle-service, per connection**: a token bucket (20 events per second, bursts of 40) runs before any event handler. Extra events are dropped, answered `RATE_LIMITED` and announced with `rate:limited`. More than 40 dropped events in 10 s block the token's identity and the client's address for 30 s (in Redis, so every replica refuses them): the connection gets `rate:blocked` and is closed, and handshakes are refused with `BLOCKED` while the block lasts.
+- **api-gateway, per address**: a token bucket per client address and kind of request (room creation, guest token, Socket.IO handshake, long-polling, the rest) inside the security chain, after CORS and before authentication; an empty bucket is answered `429` with `Retry-After`. With `REDIS_URL` the buckets are shared by every gateway instance.
+- **Client address**: taken from `X-Forwarded-For` only for the proxies in `TRUSTED_PROXY_HOPS` (0 by default: the connection's address).
+- **Incident log**: one JSON line per incident (`abuse.rate_limited`, `abuse.blocked`, `abuse.refused`), in the same shape as the SEG-1 audit trail. If Redis fails, requests go through and the error is logged.
+- **Results** (140 users plus 5 clients sending 200 events per second): the abusive client is limited within 422 ms in the worst case and blocked in all 50 connections it opened; normal users had no errors, and their p95 stayed within the run-to-run noise of the measurement.
 
 ## Authentication (SEG-1)
 
@@ -334,4 +368,4 @@ Quality scenario SEG-1 is documented, with its tests and evidence, in [docs/qual
 - **Authentication, next steps**: `users-service` still trusts the network (it is only reachable through the gateway and from `battle-service`); making it a resource server and linking `users.external_id` to the Entra ID object id are future work.
 - **Payments**: dedicated payments service behind the gateway; provider to be decided.
 - **Match history UI**: the `GET /api/matches` endpoints exist (HU 21); a per-user history page is a future story.
-- **Horizontal scaling of battle-service**: replace `InMemoryRoomRepository` with Redis and enable the Socket.IO Redis adapter.
+- **Horizontal scaling of battle-service, next steps**: the Redis state and the Socket.IO adapter are done (REN-1). Still to do: re-arm the round and battle timers of a replica that stops (DIS-1), report Redis in the health endpoint, and deploy Azure Cache for Redis with two replicas in Azure Container Apps.

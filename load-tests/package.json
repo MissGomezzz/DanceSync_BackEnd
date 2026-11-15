@@ -1,0 +1,16 @@
+{
+  "name": "dancesync-load-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pruebas de carga y estrés (REN-1) del Battle Service de DanceSync con Artillery",
+  "scripts": {
+    "smoke": "artillery run scenarios/smoke.yml --output results/smoke.json && node scripts/summary.mjs results/smoke.json",
+    "nominal": "artillery run scenarios/nominal.yml --output results/nominal.json && node scripts/summary.mjs results/nominal.json",
+    "stress": "artillery run scenarios/stress.yml --output results/stress.json && node scripts/summary.mjs results/stress.json",
+    "summary": "node scripts/summary.mjs"
+  },
+  "dependencies": {
+    "artillery": "^2.0.0",
+    "socket.io-client": "^4.8.3"
+  }
+}

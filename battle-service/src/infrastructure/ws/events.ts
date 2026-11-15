@@ -1,4 +1,6 @@
 import type { AuthIdentity } from "../../application/auth/AuthIdentity.js";
+import type { RateBlockedPayload } from "../abuse/abuseProtection.js";
+import type { RateLimitedPayload } from "../abuse/eventRateLimit.js";
 import type { ChatMessage } from "../../domain/model/ChatMessage.js";
 import type { RoomDto } from "../serialization/roomDto.js";
 import type { SubmitWordOutcome } from "../../domain/model/WordRace.js";
@@ -36,6 +38,10 @@ export const ServerEvents = {
   ROOM_KICKED: "room:kicked",
   VOTE_MINE: "vote:mine",
   ERROR: "error:domain",
+  /** SEG-3: the connection sent events faster than allowed and some were dropped. */
+  RATE_LIMITED: "rate:limited",
+  /** SEG-3: the connection kept flooding; it is blocked for a while and closed right after this. */
+  RATE_BLOCKED: "rate:blocked",
 } as const;
 
 /**
@@ -261,6 +267,8 @@ export interface ServerToClientEvents {
   [ServerEvents.ROOM_KICKED]: (payload: RoomKickedPayload) => void;
   [ServerEvents.VOTE_MINE]: (payload: VoteMinePayload) => void;
   [ServerEvents.ERROR]: (error: DomainErrorPayload) => void;
+  [ServerEvents.RATE_LIMITED]: (payload: RateLimitedPayload) => void;
+  [ServerEvents.RATE_BLOCKED]: (payload: RateBlockedPayload) => void;
 }
 
 export interface SocketData {
@@ -274,4 +282,6 @@ export interface SocketData {
   /** The seat this socket is bound to by room:join; `playerId` is always `auth.playerId`. */
   playerId?: string;
   roomCode?: string;
+  /** The client's address (behind trusted proxies), for the SEG-3 block and incident log. */
+  clientIp?: string;
 }
