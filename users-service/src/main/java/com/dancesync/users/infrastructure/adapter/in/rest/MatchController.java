@@ -7,6 +7,8 @@ import com.dancesync.users.infrastructure.adapter.in.rest.dto.RecordMatchRequest
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -26,6 +28,8 @@ import java.util.UUID;
 @RequestMapping("/api/matches")
 public class MatchController {
 
+    private static final Logger log = LoggerFactory.getLogger(MatchController.class);
+
     private final RecordMatchUseCase recordMatch;
     private final GetMatchUseCase getMatch;
 
@@ -34,10 +38,20 @@ public class MatchController {
         this.getMatch = getMatch;
     }
 
-    /** Idempotent upsert: storing the same battle again replaces the stored match. */
+    /**
+     * Idempotent upsert: storing the same battle again replaces the stored match. The line
+     * logged here ends the trace of a battle (OBS-1): it carries the battle's correlation id,
+     * sent by battle-service as X-Correlation-Id.
+     */
     @PutMapping("/{id}")
     public MatchResponse record(@PathVariable UUID id, @Valid @RequestBody RecordMatchRequest request) {
-        return MatchResponse.from(recordMatch.record(request.toDomain(id)));
+        MatchResponse stored = MatchResponse.from(recordMatch.record(request.toDomain(id)));
+        log.atInfo()
+                .addKeyValue("battleId", id)
+                .addKeyValue("roomCode", request.roomCode())
+                .addKeyValue("participants", request.participants() == null ? 0 : request.participants().size())
+                .log("Match stored");
+        return stored;
     }
 
     @GetMapping("/{id}")
