@@ -12,8 +12,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "tsx --test test/*.test.ts",
     "seg1:e2e": "tsx scripts/seg1-e2e.ts",
-    "test:coverage": "c8 --reporter=text-summary --reporter=lcov --check-coverage --lines=80 --include=\"src/**/*.ts\" --exclude=\"src/server.ts\" tsx --test test/*.test.ts"
-  },
+    "test:coverage": "c8 --reporter=text-summary --reporter=lcov --check-coverage --lines=80 --include=\"src/**/*.ts\" --exclude=\"src/server.ts\" tsx --test --test-concurrency=1 test/*.test.ts"  },
   "license": "UNLICENSED",
   "packageManager": "pnpm@10.11.0",
   "dependencies": {
