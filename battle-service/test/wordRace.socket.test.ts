@@ -37,9 +37,9 @@ import { trustClaimedPlayerId } from "./support/auth.js";
 import type { RoomDto } from "../src/infrastructure/serialization/roomDto.js";
 import { AwardWordBonus } from "../src/application/usecases/AwardWordBonus.js";
 
-/** Round openings (ms after the battle starts) and window, shrunk so the test runs in about a second. */
-const OFFSETS_MS = [100, 1400, 2700, 4000];
-const WINDOW_MS = 1000;
+/** Round openings (ms after the battle starts) and window. Wide enough that a slow CI runner does not close a round before its message is read. */
+const OFFSETS_MS = [100, 2300, 4500, 6700];
+const WINDOW_MS = 2000;
 
 type AckResponse<T> = { ok: true; data: T } | { ok: false; error: { code: string; message: string } };
 type SubmitAck = { outcome: string; winnerId: string | null };
@@ -70,7 +70,7 @@ async function ok<T>(socket: ClientSocket, event: string, payload: unknown): Pro
   return response.data;
 }
 
-async function waitUntil(condition: () => boolean, label: string, timeoutMs = 3000): Promise<void> {
+async function waitUntil(condition: () => boolean, label: string, timeoutMs = 6000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!condition()) {
     if (Date.now() > deadline) assert.fail(`Timed out waiting for ${label}`);
