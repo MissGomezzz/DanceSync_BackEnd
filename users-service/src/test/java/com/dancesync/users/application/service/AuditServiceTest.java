@@ -13,6 +13,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 import static com.dancesync.users.support.AuditFixtures.vote;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -97,6 +99,34 @@ class AuditServiceTest {
 
         assertThat(result.problem()).isEqualTo(Problem.TRUNCATED);
         assertThat(result.firstBrokenSeq()).isEqualTo(3);
+    }
+
+    @Test
+    void aBatchCommittedDuringTheWalkIsNotReportedAsTruncated() {
+        AtomicReference<AuditService> writer = new AtomicReference<>();
+        InMemoryAuditLogRepository busy = new InMemoryAuditLogRepository() {
+            @Override
+            public synchronized void forEachInOrder(Consumer<AuditRecord> consumer) {
+                // The walk reads the records visible when its query started...
+                List<AuditRecord> snapshot = all();
+                // ...while another producer's batch commits.
+                writer.get().record(List.of(vote("dan")));
+                snapshot.forEach(consumer);
+            }
+        };
+        AuditService walking = new AuditService(busy, ip -> "unknown", new AuditChain(null),
+                Clock.fixed(Instant.parse("2026-11-15T12:00:05Z"), ZoneOffset.UTC));
+        writer.set(walking);
+        walking.record(List.of(vote("ana"), vote("bob"), vote("cam")));
+
+        ChainVerification during = walking.verify();
+        assertThat(during.valid()).isTrue();
+        assertThat(during.headSeq()).isEqualTo(3);
+
+        // The next walk sees the new batch and still finds the chain intact.
+        ChainVerification after = walking.verify();
+        assertThat(after.valid()).isTrue();
+        assertThat(after.headSeq()).isEqualTo(4);
     }
 
     @Test
