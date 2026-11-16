@@ -32,7 +32,14 @@ public class PrometheusAlertsClient implements OperationalAlertsPort {
         SimpleClientHttpRequestFactory requests = new SimpleClientHttpRequestFactory();
         requests.setConnectTimeout(TIMEOUT);
         requests.setReadTimeout(TIMEOUT);
-        this.client = RestClient.builder().baseUrl(baseUrl.trim().replaceAll("/+$", "")).requestFactory(requests).build();
+        this.client = RestClient.builder().baseUrl(withoutTrailingSlashes(baseUrl.trim())).requestFactory(requests).build();
+    }
+
+    /** Drops trailing slashes with a plain scan (a "/+$" regex backtracks quadratically on long inputs). */
+    static String withoutTrailingSlashes(String url) {
+        int end = url.length();
+        while (end > 0 && url.charAt(end - 1) == '/') end--;
+        return url.substring(0, end);
     }
 
     @Override

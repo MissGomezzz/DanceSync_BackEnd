@@ -29,12 +29,19 @@ function positiveInteger(source: Source, name: string, fallback: number): number
   return parsed;
 }
 
+/** Drops trailing slashes with a plain scan (a /\/+$/ regex backtracks quadratically on long inputs). */
+function withoutTrailingSlashes(url: string): string {
+  let end = url.length;
+  while (end > 0 && url[end - 1] === "/") end--;
+  return url.slice(0, end);
+}
+
 export function loadAuditConfig(source: Source = process.env): AuditConfig {
   const internalToken = source.AUDIT_INTERNAL_TOKEN?.trim() ?? "";
   if (internalToken.length > 0 && Buffer.byteLength(internalToken, "utf8") < MIN_SECRET_BYTES) {
     throw new Error(`Environment variable AUDIT_INTERNAL_TOKEN must be at least ${MIN_SECRET_BYTES} bytes long`);
   }
-  const usersServiceUrl = (source.USERS_SERVICE_URL ?? "http://localhost:8081").replace(/\/+$/, "");
+  const usersServiceUrl = withoutTrailingSlashes(source.USERS_SERVICE_URL ?? "http://localhost:8081");
   return {
     enabled: (source.AUDIT_ENABLED ?? "true").trim().toLowerCase() !== "false",
     ingestUrl: `${usersServiceUrl}/internal/audit/events`,
