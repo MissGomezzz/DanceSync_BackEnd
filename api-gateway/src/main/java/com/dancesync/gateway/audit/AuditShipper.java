@@ -38,6 +38,9 @@ public class AuditShipper {
     static final String HEADER = "X-Internal-Token";
     private static final Logger log = LoggerFactory.getLogger(AuditShipper.class);
     private static final long MAX_BACKOFF_MS = 30_000;
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
+    /** How long shutdown waits for a delivery in flight: one request timeout. */
+    private static final Duration SHUTDOWN_WAIT = REQUEST_TIMEOUT;
 
     private final AuditProperties properties;
     private final BlockingQueue<AuditEntry> queue;
@@ -89,15 +92,24 @@ public class AuditShipper {
     }
 
     private void flushSafely() {
+        flushSafely(false);
+    }
+
+    private void flushSafely(boolean ignoreBackoff) {
         try {
-            flush();
+            flush(ignoreBackoff);
         } catch (RuntimeException e) {
             log.atWarn().addKeyValue("error", e.getClass().getSimpleName()).log("Audit flush failed");
         }
     }
 
     /** Sends everything queued, batch by batch, until the queue is empty or a delivery fails. */
-    synchronized void flush() {
+    void flush() {
+        flush(false);
+    }
+
+    /** @param ignoreBackoff try now even if the last delivery failed recently (the last attempt on shutdown) */
+    private synchronized void flush(boolean ignoreBackoff) {
         if (!properties.shippingConfigured()) {
             if (!warnedNotConfigured && !queue.isEmpty()) {
                 warnedNotConfigured = true;
@@ -105,7 +117,7 @@ public class AuditShipper {
             }
             return;
         }
-        if (System.currentTimeMillis() < nextAttemptAt) return;
+        if (!ignoreBackoff && System.currentTimeMillis() < nextAttemptAt) return;
         while (true) {
             if (pending.isEmpty()) {
                 List<AuditEntry> batch = new ArrayList<>(properties.batchSize());
@@ -133,7 +145,7 @@ public class AuditShipper {
         }
         body.append("]}");
         HttpRequest request = HttpRequest.newBuilder(URI.create(properties.ingestUrl()))
-                .timeout(Duration.ofSeconds(5))
+                .timeout(REQUEST_TIMEOUT)
                 .header("Content-Type", "application/json")
                 .header(HEADER, properties.internalToken())
                 .POST(HttpRequest.BodyPublishers.ofString(body.toString()))
@@ -171,11 +183,23 @@ public class AuditShipper {
         return queue.size() + pending.size();
     }
 
-    /** On shutdown: one last attempt to deliver what is queued, so a deploy loses nothing. */
+    /**
+     * On shutdown: one last attempt to deliver what is queued, so a deploy loses nothing. A delivery
+     * in flight is allowed to finish (up to one request timeout) rather than interrupted, and the
+     * last attempt ignores the back-off of an earlier failure.
+     */
     @PreDestroy
     void shutdown() {
-        worker.shutdownNow();
-        nextAttemptAt = 0;
-        flushSafely();
+        boolean interrupted = false;
+        worker.shutdown();
+        try {
+            if (!worker.awaitTermination(SHUTDOWN_WAIT.toMillis(), TimeUnit.MILLISECONDS)) worker.shutdownNow();
+        } catch (InterruptedException e) {
+            worker.shutdownNow();
+            interrupted = true;
+        }
+        flushSafely(true);
+        // Restored only now: with the flag set, the last delivery would be abandoned right away.
+        if (interrupted) Thread.currentThread().interrupt();
     }
 }

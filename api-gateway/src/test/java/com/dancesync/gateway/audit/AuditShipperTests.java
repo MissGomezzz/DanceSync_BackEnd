@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -25,6 +26,7 @@ class AuditShipperTests {
 
     private final List<String> bodies = new CopyOnWriteArrayList<>();
     private final AtomicInteger nextStatus = new AtomicInteger(202);
+    private final AtomicLong responseDelayMs = new AtomicLong();
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
     private HttpServer server;
 
@@ -32,6 +34,7 @@ class AuditShipperTests {
         server = HttpServer.create(new InetSocketAddress("localhost", 0), 0);
         server.createContext("/internal/audit/events", exchange -> {
             bodies.add(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            pause(responseDelayMs.get());
             byte[] body = "{}".getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(nextStatus.get(), body.length);
             try (OutputStream out = exchange.getResponseBody()) {
@@ -40,6 +43,14 @@ class AuditShipperTests {
         });
         server.start();
         return "http://localhost:" + server.getAddress().getPort() + "/internal/audit/events";
+    }
+
+    private static void pause(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @AfterEach
@@ -118,6 +129,40 @@ class AuditShipperTests {
 
         assertThat(shipper.backlog()).isZero();
         assertThat(count("refused")).isEqualTo(1);
+    }
+
+    @Test
+    void shutdownLetsTheDeliveryInFlightFinishAndSendsWhatIsLeft() throws Exception {
+        String url = startUsersService();
+        responseDelayMs.set(500);
+        // The background worker sends on its own every 50 ms.
+        AuditShipper shipper = new AuditShipper(new AuditProperties(true, url, TOKEN, Duration.ofMillis(50), 10, 100), registry);
+        shipper.submit(entry("in-flight"));
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (bodies.isEmpty() && System.currentTimeMillis() < deadline) Thread.sleep(10);
+        assertThat(bodies).as("the worker's delivery reached users-service").hasSize(1);
+        shipper.submit(entry("queued"));
+
+        shipper.shutdown();
+
+        assertThat(shipper.backlog()).isZero();
+        assertThat(count("shipped")).isEqualTo(2);
+        assertThat(String.join("", bodies)).contains("\"correlationId\":\"in-flight\"").contains("\"correlationId\":\"queued\"");
+    }
+
+    @Test
+    void theLastAttemptOnShutdownIgnoresTheBackOff() throws Exception {
+        AuditShipper shipper = shipper(startUsersService(), 10, 100);
+        nextStatus.set(503);
+        shipper.submit(entry("kept"));
+        shipper.flush();
+        assertThat(shipper.backlog()).isEqualTo(1);
+
+        nextStatus.set(202);
+        shipper.shutdown();
+
+        assertThat(shipper.backlog()).isZero();
+        assertThat(count("shipped")).isEqualTo(1);
     }
 
     @Test
