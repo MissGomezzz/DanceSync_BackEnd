@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { AuditEntry } from "../src/application/ports/AuditTrail.js";
+import type { Logger } from "../src/application/ports/Logger.js";
 import { loadAuditConfig, type AuditConfig } from "../src/infrastructure/audit/auditConfig.js";
-import { HttpAuditShipper, type AuditWireRecord } from "../src/infrastructure/audit/HttpAuditShipper.js";
+import { HttpAuditShipper, MAX_INGEST_BATCH, type AuditWireRecord } from "../src/infrastructure/audit/HttpAuditShipper.js";
 import { auditDetail } from "../src/infrastructure/audit/socketAudit.js";
 
 const TOKEN = "test-internal-token-of-at-least-32-bytes";
@@ -119,6 +120,29 @@ describe("SEG-2 audit shipper: delivery to users-service", () => {
     const disabled = new HttpAuditShipper(config({ enabled: false }), { fetchImpl: service.fetchImpl });
     disabled.record(entry("vote:cast"));
     assert.equal(disabled.getStats().backlog, 0);
+  });
+
+  it("a batch size above the ingest limit is capped instead of refused", async () => {
+    const service = usersService(202);
+    const warnings: string[] = [];
+    const logger: Logger = {
+      debug() {},
+      info() {},
+      error() {},
+      warn: (_fields, message) => void warnings.push(message),
+      child: () => logger,
+    };
+    const shipper = new HttpAuditShipper(config({ batchSize: 2_000, bufferCapacity: 1_000 }), {
+      fetchImpl: service.fetchImpl,
+      logger,
+    });
+    for (let i = 0; i <= MAX_INGEST_BATCH; i++) shipper.record(entry("chat:message"));
+
+    await shipper.flush();
+
+    assert.deepEqual(service.received.map((r) => r.events.length), [MAX_INGEST_BATCH, 1]);
+    assert.equal(shipper.getStats().shipped, MAX_INGEST_BATCH + 1);
+    assert.match(warnings.join("\n"), /AUDIT_BATCH_SIZE/);
   });
 
   it("close() makes a last delivery attempt", async () => {

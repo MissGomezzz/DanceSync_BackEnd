@@ -90,6 +90,18 @@ class AuditShipperTests {
     }
 
     @Test
+    void aBatchSizeAboveTheIngestLimitIsCappedInsteadOfRefused() throws Exception {
+        AuditShipper shipper = shipper(startUsersService(), 2_000, 1_000);
+        for (int i = 0; i < AuditShipper.MAX_INGEST_BATCH + 1; i++) shipper.submit(entry("c-" + i));
+
+        shipper.flush();
+
+        assertThat(bodies).hasSize(2);
+        assertThat(bodies.get(0).split("\"correlationId\":", -1)).hasSize(AuditShipper.MAX_INGEST_BATCH + 1);
+        assertThat(count("shipped")).isEqualTo(AuditShipper.MAX_INGEST_BATCH + 1);
+    }
+
+    @Test
     void keepsTheBatchWhileUsersServiceIsDownAndDeliversItLater() throws Exception {
         AuditShipper shipper = shipper(startUsersService(), 10, 100);
         nextStatus.set(503);

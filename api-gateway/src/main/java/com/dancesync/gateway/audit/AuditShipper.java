@@ -41,8 +41,11 @@ public class AuditShipper {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
     /** How long shutdown waits for a delivery in flight: one request timeout. */
     private static final Duration SHUTDOWN_WAIT = REQUEST_TIMEOUT;
+    /** Largest batch users-service ingests (its dancesync.audit.max-batch); a bigger one is refused whole. */
+    static final int MAX_INGEST_BATCH = 500;
 
     private final AuditProperties properties;
+    private final int batchSize;
     private final BlockingQueue<AuditEntry> queue;
     private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3)).build();
     private final ScheduledExecutorService worker;
@@ -57,6 +60,11 @@ public class AuditShipper {
 
     public AuditShipper(AuditProperties properties, MeterRegistry registry) {
         this.properties = properties;
+        this.batchSize = Math.min(properties.batchSize(), MAX_INGEST_BATCH);
+        if (properties.batchSize() > MAX_INGEST_BATCH) {
+            log.atWarn().addKeyValue("configured", properties.batchSize()).addKeyValue("used", MAX_INGEST_BATCH)
+                    .log("dancesync.audit.batch-size is above what users-service ingests; batches are capped");
+        }
         this.queue = new ArrayBlockingQueue<>(properties.bufferCapacity());
         this.shipped = counter(registry, "shipped", "Audit records accepted by users-service");
         this.dropped = counter(registry, "dropped", "Audit records lost because the buffer was full");
@@ -120,8 +128,8 @@ public class AuditShipper {
         if (!ignoreBackoff && System.currentTimeMillis() < nextAttemptAt) return;
         while (true) {
             if (pending.isEmpty()) {
-                List<AuditEntry> batch = new ArrayList<>(properties.batchSize());
-                queue.drainTo(batch, properties.batchSize());
+                List<AuditEntry> batch = new ArrayList<>(batchSize);
+                queue.drainTo(batch, batchSize);
                 if (batch.isEmpty()) return;
                 pending = batch;
             }

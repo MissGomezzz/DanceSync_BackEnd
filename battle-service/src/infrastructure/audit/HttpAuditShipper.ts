@@ -24,6 +24,8 @@ const MAX_BACKOFF_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 5_000;
 /** Longest User-Agent kept; users-service cuts at 512 too. */
 const MAX_USER_AGENT = 512;
+/** Largest batch users-service ingests (its dancesync.audit.max-batch); a bigger one is refused whole. */
+export const MAX_INGEST_BATCH = 500;
 
 /**
  * Delivers the audit records of this replica to users-service in batches (SEG-2), off the event path:
@@ -41,6 +43,7 @@ export class HttpAuditShipper implements AuditTrail {
   private pending: AuditWireRecord[] = [];
   private readonly source = `${SERVICE_NAME}@${hostname()}`;
   private readonly timer: NodeJS.Timeout | undefined;
+  private readonly batchSize: number;
   private flushing: Promise<void> | null = null;
   private backoffMs = 0;
   private nextAttemptAt = 0;
@@ -57,6 +60,13 @@ export class HttpAuditShipper implements AuditTrail {
       now?: () => Date;
     } = {},
   ) {
+    this.batchSize = Math.min(config.batchSize, MAX_INGEST_BATCH);
+    if (config.batchSize > MAX_INGEST_BATCH) {
+      this.logger.warn(
+        { configured: config.batchSize, used: MAX_INGEST_BATCH },
+        "AUDIT_BATCH_SIZE is above what users-service ingests; batches are capped",
+      );
+    }
     if (config.enabled) {
       this.timer = setInterval(() => void this.flush(), config.flushIntervalMs);
       this.timer.unref();
@@ -118,7 +128,7 @@ export class HttpAuditShipper implements AuditTrail {
     if (Date.now() < this.nextAttemptAt) return;
     for (;;) {
       if (this.pending.length === 0) {
-        this.pending = this.queue.splice(0, this.config.batchSize);
+        this.pending = this.queue.splice(0, this.batchSize);
         if (this.pending.length === 0) return;
       }
       if (!(await this.deliver(this.pending))) {
