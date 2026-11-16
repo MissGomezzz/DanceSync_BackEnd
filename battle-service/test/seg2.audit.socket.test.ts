@@ -5,9 +5,9 @@ import { RecordingAuditTrail } from "./support/audit.js";
 import { emit, ok, rejected, SocketHarness, waitUntil } from "./support/socketHarness.js";
 
 /**
- * SEG-2 (non-repudiation) over Socket.IO: every handshake and every client event yields one audit
- * record with the user taken from the validated token (never from an id the client sends), the
- * client's address behind the trusted proxies, the browser, the action, its outcome and the
+ * SEG-2 (non-repudiation) over Socket.IO: every handshake and every client event (except a relayed
+ * WebRTC signaling message) yields one audit record with the user taken from the validated token
+ * (never from an id the client sends), the client's address behind the trusted proxies, the browser, the action, its outcome and the
  * correlation id of the connection. Runs against the real token validation.
  */
 const entra = new FakeEntra();
@@ -147,6 +147,28 @@ describe("SEG-2 Socket.IO: every client event is recorded", () => {
     await waitUntil(() => trail.entries.length === 3, "join and kick");
     for (const entry of trail.entries) assert.equal(entry.userId, "user-mallory");
     assert.equal(trail.of("player:kick")[0].detail, "playerId=user-ana");
+  });
+
+  it("WebRTC signaling relays are not recorded, their refusals are", async () => {
+    const code = await newRoom();
+    const ana = await harness.client(await entra.token({ oid: "user-ana" }));
+    const beto = await harness.client(await entra.token({ oid: "user-beto" }));
+    await ok(ana, "room:join", { roomCode: code });
+    await ok(beto, "room:join", { roomCode: code });
+    await ok(ana, "webrtc:ready", { roomCode: code, playerId: "user-ana" });
+    for (let i = 0; i < 5; i++) {
+      await ok(ana, "webrtc:signal", { roomCode: code, to: "user-beto", negotiationId: "n1", candidate: { candidate: `c${i}` } });
+    }
+    await rejected(ana, "webrtc:signal", { roomCode: code, to: "user-beto", negotiationId: "n1" }, "INVALID_MESSAGE");
+    await ok(ana, "chat:message", { roomCode: code, content: "hola" });
+
+    await waitUntil(() => trail.of("chat:message").length === 1, "the chat message");
+    assert.equal(trail.of("webrtc:ready").length, 0);
+    const signals = trail.of("webrtc:signal");
+    assert.equal(signals.length, 1);
+    assert.equal(signals[0].outcome, "failed");
+    assert.equal(signals[0].code, "INVALID_MESSAGE");
+    assert.equal(signals[0].detail, "to=user-beto");
   });
 
   it("100 % of the events are recorded, once each", async () => {

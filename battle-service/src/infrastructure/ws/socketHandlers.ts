@@ -1017,8 +1017,12 @@ interface GuardContext {
   payload?: unknown;
 }
 
-/** Events too chatty for the info level: WebRTC signaling relays every ICE candidate. */
-const DEBUG_EVENTS = new Set<string>([ClientEvents.WEBRTC_SIGNAL, ClientEvents.WEBRTC_READY]);
+/**
+ * WebRTC signaling relays every ICE candidate between the peers: too chatty for the info level,
+ * and a relayed message proves nothing worth one audit record per candidate (SEG-2). Its refusals
+ * are still recorded, and the flood itself is caught by the rate limit (SEG-3).
+ */
+const RELAY_EVENTS = new Set<string>([ClientEvents.WEBRTC_SIGNAL, ClientEvents.WEBRTC_READY]);
 
 /**
  * Runs a handler, replying through the ack callback when provided and emitting a
@@ -1043,6 +1047,7 @@ async function guard<T>(
   const startedAt = performance.now();
   const roomBefore = socket.data.roomCode;
   const audit = (outcome: AuditOutcome, code?: string): void => {
+    if (outcome === "ok" && RELAY_EVENTS.has(event)) return;
     try {
       trail.record({
         ...socketActor(socket, trustedProxyHops),
@@ -1065,7 +1070,7 @@ async function guard<T>(
       durationMs: Math.round(durationMs * 100) / 100,
       ...fields,
     };
-    if (DEBUG_EVENTS.has(event) && fields.ok) log.debug(line, "Socket event handled");
+    if (RELAY_EVENTS.has(event) && fields.ok) log.debug(line, "Socket event handled");
     else log.info(line, "Socket event handled");
   };
   try {
