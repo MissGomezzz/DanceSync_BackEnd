@@ -18,7 +18,7 @@ RUN apk add --no-cache curl >/dev/null \
  && current="$(printf '%s-%02d' "$year" "$month")" \
  && previous="$(if [ "$month" -eq 1 ]; then printf '%s-12' "$((year - 1))"; else printf '%s-%02d' "$year" "$((month - 1))"; fi)" \
  && for when in "$current" "$previous"; do \
-      if curl -fsSL "https://download.db-ip.com/free/dbip-${GEOIP_EDITION}-lite-${when}.mmdb.gz" -o /tmp/db.gz; then \
+      if curl --proto =https --tlsv1.2 -fsSL "https://download.db-ip.com/free/dbip-${GEOIP_EDITION}-lite-${when}.mmdb.gz" -o /tmp/db.gz; then \
         gunzip -c /tmp/db.gz > /geoip/dbip-lite.mmdb && rm -f /tmp/db.gz && echo "GeoIP ${when} OK" && break; \
       fi; \
     done; \

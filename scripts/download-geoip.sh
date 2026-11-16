@@ -14,12 +14,12 @@ mkdir -p "$dir"
 month="$(date -u +%Y-%m)"
 url="https://download.db-ip.com/free/dbip-${kind}-lite-${month}.mmdb.gz"
 echo "Downloading $url"
-if ! curl -fsSL "$url" -o "$dir/download.mmdb.gz"; then
+if ! curl --proto =https --tlsv1.2 -fsSL "$url" -o "$dir/download.mmdb.gz"; then
   # The new month's file appears a few days in: fall back to the previous one.
   previous="$(date -u -d "$(date -u +%Y-%m-01) -1 day" +%Y-%m 2>/dev/null || date -u -v-1m +%Y-%m)"
   url="https://download.db-ip.com/free/dbip-${kind}-lite-${previous}.mmdb.gz"
   echo "Not published yet; downloading $url"
-  curl -fsSL "$url" -o "$dir/download.mmdb.gz"
+  curl --proto =https --tlsv1.2 -fsSL "$url" -o "$dir/download.mmdb.gz"
 fi
 gunzip -c "$dir/download.mmdb.gz" > "$dir/dbip-lite.mmdb"
 rm "$dir/download.mmdb.gz"
