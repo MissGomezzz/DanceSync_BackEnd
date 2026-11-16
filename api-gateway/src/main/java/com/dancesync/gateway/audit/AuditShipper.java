@@ -198,16 +198,16 @@ public class AuditShipper {
      */
     @PreDestroy
     void shutdown() {
-        boolean interrupted = false;
         worker.shutdown();
         try {
             if (!worker.awaitTermination(SHUTDOWN_WAIT.toMillis(), TimeUnit.MILLISECONDS)) worker.shutdownNow();
         } catch (InterruptedException e) {
             worker.shutdownNow();
-            interrupted = true;
+            // Flush before restoring the flag: with it set, the last delivery would be abandoned right away.
+            flushSafely(true);
+            Thread.currentThread().interrupt();
+            return;
         }
         flushSafely(true);
-        // Restored only now: with the flag set, the last delivery would be abandoned right away.
-        if (interrupted) Thread.currentThread().interrupt();
     }
 }
