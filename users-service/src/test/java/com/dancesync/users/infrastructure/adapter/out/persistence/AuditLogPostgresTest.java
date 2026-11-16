@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -187,6 +188,28 @@ class AuditLogPostgresTest {
 
         assertThat(result.problem()).isEqualTo(Problem.MISSING_RECORD);
         assertThat(result.firstBrokenSeq()).isEqualTo(2);
+    }
+
+    /**
+     * The hash covers the UTF-8 bytes of the record, and both the JVM and the driver encode a lone
+     * surrogate as '?', so text cut in the middle of an emoji (or sent malformed) still verifies.
+     */
+    @Test
+    void textWithSplitOrLoneSurrogatesStillVerifies() {
+        // An emoji right at the 512-character cut of the User-Agent, and a lone surrogate in the detail.
+        String userAgent = "a".repeat(511) + "\uD83D\uDE00" + "tail";
+        AuditEvent event = AuditEvent.normalized(UUID.randomUUID(), Instant.now(), "battle-service@battle-1",
+                AuditEvent.AuditChannel.SOCKET_IO, "word:submit", "ABC123", AuditOutcome.OK, null, null, "oid-ana",
+                AuditEvent.AuditUserKind.USER, "Ana", "203.0.113.7", userAgent, "corr-1", "word=\uD83D");
+        record(List.of(event, vote("oid-bob")));
+
+        assertThat(verify().valid()).isTrue();
+
+        // A later change is still found, so the walk did not stop at the first record.
+        bypassingTheTriggers("UPDATE audit_log SET user_id = 'oid-mallory' WHERE seq = 2");
+        ChainVerification tampered = verify();
+        assertThat(tampered.problem()).isEqualTo(Problem.ALTERED_RECORD);
+        assertThat(tampered.firstBrokenSeq()).isEqualTo(2);
     }
 
     @Test
