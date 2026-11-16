@@ -109,9 +109,12 @@ public class AuditService implements RecordAuditEventsUseCase, QueryAuditLogUseC
     @Override
     @Transactional(readOnly = true)
     public ChainVerification verify() {
+        // Read before the walk: everything seen so far is committed, so the walk's snapshot holds it,
+        // while batches committed during the walk are past that snapshot and must not count as lost.
+        long seenBeforeWalk = highestSeenSeq.get();
         AuditChain.Walk walk = chain.walk();
         repository.forEachInOrder(walk::accept);
-        ChainVerification result = walk.finish(highestSeenSeq.get());
+        ChainVerification result = walk.finish(seenBeforeWalk);
         highestSeenSeq.accumulateAndGet(result.headSeq(), Math::max);
         lastVerification.set(result);
         return result;
