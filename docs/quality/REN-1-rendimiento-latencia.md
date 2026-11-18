@@ -4,10 +4,10 @@ Implementación y evidencia del escenario de calidad REN-1 de DanceSync (Squad H
 
 | | |
 |---|---|
-| Estado | **Implementado y verificado en el prototipo local.** Falta repetir la medición a través del API Gateway y en Azure (ver [Lo que queda pendiente](#lo-que-queda-pendiente)) |
+| Estado | **Implementado y verificado en el prototipo local, y desplegado en Azure con el balanceador propio** (nginx delante de dos réplicas, [ADR-10](../adr/ADR-10-balanceador-propio-azure.md)). Falta la medición de carga en Azure (ver [Lo que queda pendiente](#lo-que-queda-pendiente)) |
 | Repositorio | `DanceSync_BackEnd` (`battle-service`, `load-tests`, entorno de escala), rama `feat/rendimiento-latencia` |
 | Alcance | Estado compartido en Redis, varias réplicas del Battle Service detrás de un balanceador, y las pruebas de carga y estrés que lo verifican. `api-gateway` y `users-service` no se modificaron |
-| Decisiones | [ADR-01: estado de salas y rondas en Redis](../adr/ADR-01-estado-en-redis.md) · [ADR-02: balanceador y conexión por WebSocket sin afinidad](../adr/ADR-02-balanceador-solo-websocket.md) |
+| Decisiones | [ADR-01: estado de salas y rondas en Redis](../adr/ADR-01-estado-en-redis.md) · [ADR-02: balanceador y conexión por WebSocket sin afinidad](../adr/ADR-02-balanceador-solo-websocket.md) · [ADR-10: balanceador propio también en Azure](../adr/ADR-10-balanceador-propio-azure.md) |
 
 ## Contenido
 
@@ -18,6 +18,7 @@ Implementación y evidencia del escenario de calidad REN-1 de DanceSync (Squad H
 5. [Configuración](#5-configuración)
 6. [Verificación y evidencia](#6-verificación-y-evidencia)
 7. [Análisis de los resultados](#7-análisis-de-los-resultados)
+   - [Despliegue en Azure con el balanceador propio](#despliegue-en-azure-con-el-balanceador-propio)
 8. [Estado actual del escenario](#8-estado-actual-del-escenario)
 9. [Lo que queda pendiente](#lo-que-queda-pendiente)
 
@@ -240,22 +241,62 @@ node scripts/chart.mjs ../docs/quality/ren-1/evidence/stress-estres-1-replica-20
 - Cada configuración de estrés se corrió una vez. Los picos aislados de la gráfica (por ejemplo, 633 ms con 224 usuarios y una réplica) muestran la variabilidad entre intervalos.
 - Los números absolutos dependen del límite de 0,5 CPU por réplica; lo que se generaliza es la comparación relativa.
 
+## Despliegue en Azure con el balanceador propio
+
+Requisito del curso: el reparto entre réplicas lo hace un balanceador nuestro, no el de la plataforma. En Azure, `battle-service` era una Container App con 2 réplicas y el ingreso de Container Apps elegía la réplica; ahora cada réplica es su propia app y nuestro nginx decide ([ADR-10](../adr/ADR-10-balanceador-propio-azure.md)).
+
+```mermaid
+flowchart LR
+    C[Navegador] --> G[api-gateway]
+    G -- "BATTLE_SERVICE_URL=http://load-balancer" --> LB["load-balancer<br/>nginx, least_conn<br/>(ingreso HTTP interno)"]
+    LB -- "TCP 3001" --> A[battle-service-a]
+    LB -- "TCP 3002" --> B[battle-service-b]
+    A <--> R[(Redis)]
+    B <--> R
+```
+
+| Container App | Imagen | Ingreso | Réplicas | CPU / memoria |
+|---|---|---|---|---|
+| `load-balancer` | `load-balancer` (`load-balancer/azure/`: nginx 1.27 con nuestra configuración) | HTTP interno, puerto 80 | 1 | 0,25 / 0,5 GiB |
+| `battle-service-a` | `battle-service` (la misma que el pipeline despliega) | TCP interno, puerto 3001 | 1 | 0,5 / 1 GiB |
+| `battle-service-b` | `battle-service` | TCP interno, puerto 3002 | 1 | 0,5 / 1 GiB |
+| `battle-service` (anterior) | | | 0 (respaldo) | |
+
+- **Por qué TCP.** Con ingreso TCP, Azure solo pasa bytes hacia la réplica: no enruta por nombre de host ni elige destino. El puerto de cada app identifica la réplica en el registro de nginx (`"replica":"battle-service-a"`).
+- **`TRUSTED_PROXY_HOPS=4`** en las réplicas (ingreso del gateway, gateway, ingreso de nginx y nginx). En el gateway sigue en 1.
+- **Registro del balanceador.** Una línea JSON `lb.request` por petición, con la réplica, el destino y el estado. Una conexión WebSocket aparece al cerrarse (estado 101 y su duración). `GET /lb-status` (solo dentro del entorno) da las conexiones activas.
+
+### Verificación en Azure (17 de noviembre de 2026)
+
+Con `load-tests/demo/dancesync-bot.mjs` desde Azure Cloud Shell y con la app real. Salidas completas en [`ren-1/evidence/azure/`](ren-1/evidence/azure/).
+
+| Prueba | Resultado |
+|---|---|
+| Partida completa desde el frontend (PC y teléfono) | Funciona. Sus dos WebSocket fueron uno a cada réplica |
+| 20 conexiones de invitado durante 60 s | 20 de 20 abiertas todo el minuto; `lb-status`: 22 conexiones activas; reparto en el registro de nginx: **12 a la réplica a y 11 a la b** |
+| Caída de `battle-service-a` (`az containerapp revision restart`) con 10 conexiones abiertas | Cayeron solo las 4 de la réplica a; **se recuperaron en la b en 0,6-2,4 s** (criterio DIS-1: < 30 s) y las que tenían asiento volvieron a la sala |
+| Ataque de un cliente a 200 eventos por segundo (SEG-3) | Limitado a los 258 ms y bloqueado a los 483 ms; la IP registrada es la del cliente (ver [SEG-3](SEG-3-proteccion-abuso.md)) |
+
+Las reconexiones de 2,4 s son las que llegaron a nginx antes de que marcara la réplica caída: esperaron `proxy_connect_timeout` (2 s) y el intento se repitió en la otra réplica. Después de ese primer fallo, ninguna conexión más fue a la réplica caída.
+
+Estas pruebas verifican el reparto y la recuperación en Azure. No son una medición de rendimiento: la carga nominal de 140 usuarios no se ha repetido en Azure.
+
 ## 8. Estado actual del escenario
 
 Texto para la sección "Estado actual" de REN-1 en el documento de escenarios:
 
-> **Implementado y verificado en el prototipo local.** Estado de salas y rondas en Redis, adaptador de Socket.IO entre réplicas, balanceador nginx con 2 réplicas del Battle Service y clientes que conectan por WebSocket desde el inicio. Con 140 usuarios durante 10 minutos, p95 de 16,9 ms (chat) y 29,7 ms (voto), 0 errores y sin pérdida ni duplicación de puntajes. En la prueba de estrés, con 0,5 CPU por réplica, 1 réplica sostiene 238 usuarios y 2 réplicas 427 con p95 ≤ 300 ms (×1,79). Las pruebas de Redis corren en el pipeline. Pendiente: medir a través del API Gateway y en Azure.
+> **Implementado y verificado en el prototipo local.** Estado de salas y rondas en Redis, adaptador de Socket.IO entre réplicas, balanceador nginx con 2 réplicas del Battle Service y clientes que conectan por WebSocket desde el inicio. Con 140 usuarios durante 10 minutos, p95 de 16,9 ms (chat) y 29,7 ms (voto), 0 errores y sin pérdida ni duplicación de puntajes. En la prueba de estrés, con 0,5 CPU por réplica, 1 réplica sostiene 238 usuarios y 2 réplicas 427 con p95 ≤ 300 ms (×1,79). Las pruebas de Redis corren en el pipeline. En Azure, el mismo nginx reparte entre `battle-service-a` y `battle-service-b` (12 y 11 conexiones de 23) y, al caer una réplica, las conexiones se recuperan en la otra en menos de 2,5 s. Pendiente: la medición de carga en Azure.
 
 ## Lo que queda pendiente
 
 **No verificado**
 
-- **Medición a través del API Gateway y en Azure.** Repetir la carga nominal entrando por `api-gateway` y luego contra el despliegue en Azure Container Apps con Azure Cache for Redis.
+- **Medición de carga en Azure.** Repetir la carga nominal contra el despliegue en Azure. La carga nominal a través del API Gateway ya se midió en local (p95 66,0 ms chat y 98,5 ms voto, 0 errores). En Azure el generador no puede autenticarse con el Entra ID simulado: la prueba necesita salas creadas con cuentas reales o un emisor de prueba aceptado por el despliegue.
 
 **Por hacer**
 
 - **Salud con Redis.** `GET /api/battles/health` no comprueba Redis; una réplica sin Redis debería salir de rotación.
-- **Despliegue.** `REDIS_URL` (como secreto), Azure Cache for Redis y al menos 2 réplicas en la Container App del Battle Service.
+- ~~**Despliegue.**~~ Hecho: Redis como Container App (ADR-06) y dos réplicas detrás del balanceador propio ([ADR-10](../adr/ADR-10-balanceador-propio-azure.md)).
 
 **Relacionado con otros escenarios**
 

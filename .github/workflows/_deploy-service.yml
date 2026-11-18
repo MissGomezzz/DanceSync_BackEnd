@@ -11,6 +11,19 @@ on:
         description: Commit to build and deploy (the one CI verified)
         required: true
         type: string
+      context:
+        description: Carpeta que se construye (por defecto, la del servicio)
+        required: false
+        type: string
+        default: ""
+      apps:
+        description: >-
+          Container Apps que reciben la imagen, separadas por espacios (por defecto, la del servicio).
+          battle-service despliega en battle-service-a y battle-service-b, las dos réplicas detrás
+          del balanceador propio (REN-1 / DIS-1).
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -39,13 +52,19 @@ jobs:
 
       - name: Construir y subir la imagen
         run: |
-          docker build -t "$IMAGE" ./${{ inputs.service }}
+          docker build -t "$IMAGE" "./${{ inputs.context || inputs.service }}"
           docker push "$IMAGE"
 
-      - name: Actualizar la Container App
+      - name: Actualizar las Container Apps
+        env:
+          APPS: ${{ inputs.apps || inputs.service }}
         run: |
           az extension add --name containerapp --upgrade
-          az containerapp update \
-            --name ${{ inputs.service }} \
-            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
-            --image "$IMAGE"
+          for app in $APPS; do
+            echo "Actualizando $app -> $IMAGE"
+            az containerapp update \
+              --name "$app" \
+              --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+              --image "$IMAGE" \
+              --output none
+          done

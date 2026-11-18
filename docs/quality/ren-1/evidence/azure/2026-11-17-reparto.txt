@@ -1,0 +1,29 @@
+Reparto del balanceador propio (nginx, least_conn) en Azure - 17 de noviembre de 2026
+Flujo: cliente -> api-gateway -> load-balancer (nginx) -> battle-service-a (TCP 3001) | battle-service-b (TCP 3002)
+Generador: load-tests/demo/dancesync-bot.mjs desde Azure Cloud Shell.
+
+1) Seis peticiones de salud a nginx desde dentro del entorno (consola del contenedor de Redis):
+   wget -qO- http://load-balancer/api/battles/health   (x6) -> 6 x {"status":"UP","service":"battle-service"}
+   Registro de nginx (lb.request), en orden:
+   battle-service-a 100.100.255.16:3001 200
+   battle-service-b 100.100.231.131:3002 200
+   battle-service-a 100.100.255.16:3001 200
+   battle-service-b 100.100.231.131:3002 200
+   battle-service-a 100.100.255.16:3001 200
+   battle-service-b 100.100.231.131:3002 200
+
+2) Partida real desde el frontend (anfitrión en PC, invitado en el teléfono), al cerrar las pestañas:
+   GET /socket.io/?EIO=4&transport=websocket 101 replica=battle-service-a duration=232.8 s
+   GET /socket.io/?EIO=4&transport=websocket 101 replica=battle-service-b duration=266.1 s
+   (la segunda conexión fue a la réplica sin conexiones: least_conn)
+
+3) 20 conexiones de invitado mantenidas 60 s:
+   node dancesync-bot.mjs conexiones --url $GW --sala <CÓDIGO> --n 20 --segundos 60
+   -> "siguen abiertas: 20" durante todo el minuto
+   lb-status durante la prueba (stub_status de nginx):
+     Active connections: 22   (20 bots + el anfitrión + la propia petición)
+     server accepts handled requests  741 741 767
+     Reading: 0 Writing: 22 Waiting: 0
+   Conexiones WebSocket por réplica en el registro de nginx (incluye las 2 de la partida anterior y 1 más del navegador):
+     12 battle-service-a
+     11 battle-service-b

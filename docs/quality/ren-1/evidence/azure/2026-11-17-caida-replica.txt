@@ -1,0 +1,25 @@
+Caída de una réplica con el balanceador propio en Azure (DIS-1) - 17 de noviembre de 2026
+10 conexiones de invitado con reconexión (como el frontend), y reinicio de battle-service-a:
+
+  node dancesync-bot.mjs conexiones --url $GW --sala <CÓDIGO> --n 10 --segundos 120 --reconectar
+  az containerapp revision restart -n battle-service-a -g rg-dancesync --revision <revisión activa>   (00:21:02 UTC)
+
+Salida del bot:
+[ 74860 ms] siguen abiertas: 10
+[ 78473 ms] conexión 9: SE CAYÓ (transport close), reconectando...
+[ 78474 ms] conexión 7: SE CAYÓ (transport close), reconectando...
+[ 78474 ms] conexión 5: SE CAYÓ (transport close), reconectando...
+[ 78475 ms] conexión 3: SE CAYÓ (transport close), reconectando...
+[ 79114 ms] conexión 7: RECUPERADA en 640 ms (ROOM_FULL)
+[ 79121 ms] conexión 5: RECUPERADA en 647 ms, de vuelta en la sala
+[ 80827 ms] conexión 3: RECUPERADA en 2352 ms, de vuelta en la sala
+[ 80827 ms] conexión 9: RECUPERADA en 2354 ms (ROOM_FULL)
+[ 84861 ms] siguen abiertas: 10
+[124858 ms] reconexiones: 4, la más lenta 2354 ms, mediana 2352 ms (DIS-1: < 30 s)
+
+Lectura:
+- Solo cayeron las 4 conexiones de la réplica a (las impares: least_conn alternó a, b, a, b...); las 6 de la réplica b siguieron.
+- Las 4 se recuperaron en la réplica b en 0,6-2,4 s. Las de 2,4 s llegaron a nginx antes de que marcara la réplica a como caída:
+  esperaron proxy_connect_timeout (2 s) y el intento se repitió en la otra (proxy_next_upstream).
+- Las que tenían asiento volvieron a la sala (estado en Redis). 7 y 9 no tenían asiento (sala llena, 7 jugadores).
+- El corte llegó unos 76 s después del comando: Azure arranca la revisión nueva antes de apagar la anterior.

@@ -234,6 +234,30 @@ node scripts/summary.mjs ../docs/quality/seg-3/evidence/abuse-ataque-2026-11-15T
 node scripts/abuse-compare.mjs ../docs/quality/seg-3/evidence/nominal-base-seg3-a-2026-11-15T05-00-21.json ../docs/quality/seg-3/evidence/abuse-ataque-2026-11-15T05-26-00.json ../docs/quality/seg-3/evidence/nominal-base-seg3-b-2026-11-15T05-13-04.json
 ```
 
+### Verificación en Azure (17 de noviembre de 2026)
+
+Un cliente abusivo contra el despliegue de Azure, con todo el camino real: API Gateway, el balanceador propio (nginx, [ADR-10](../adr/ADR-10-balanceador-propio-azure.md)) y las réplicas `battle-service-a` y `battle-service-b`. Generador: `load-tests/demo/dancesync-bot.mjs ataque`, desde Azure Cloud Shell (IP pública `128.24.198.36`), contra una sala creada desde la app.
+
+| Medida | Resultado |
+|---|---|
+| Inicio de la inundación → `rate:limited` | **258 ms** (criterio: < 1 s) |
+| Inicio de la inundación → `rate:blocked` | 483 ms, bloqueo de 30 s |
+| Reconexiones durante el bloqueo | 8 de 8 rechazadas con `BLOCKED` y el tiempo restante |
+| Token de invitado nuevo desde la misma IP | Rechazado (`BLOCKED`): el bloqueo por IP se sostiene |
+| Registro del Battle Service en Azure | `abuse.rate_limited`, `abuse.blocked` y `abuse.refused` con jugador, `correlationId` e IP |
+| IP registrada | `128.24.198.36`, la IP pública del cliente: `TRUSTED_PROXY_HOPS` es correcto |
+| Panel de administración (SEG-2) | Alertas `ClientBlocked` ("Bot atacante", 9 incidentes; "Bot atacante 2", 1) y, en el registro de auditoría, la secuencia `OK` → `Rate limited` → `Blocked` con la misma hora que los registros de Azure |
+
+Salidas y capturas: [`azure-2026-11-17-ataque.txt`](seg-3/evidence/azure-2026-11-17-ataque.txt), [`azure-admin-alerts.png`](seg-3/evidence/azure-admin-alerts.png), [`azure-admin-audit-log.png`](seg-3/evidence/azure-admin-audit-log.png).
+
+Para repetirla (Node 18 o más):
+
+```bash
+cd load-tests/demo && npm install
+node dancesync-bot.mjs ataque --url https://<api-gateway> --sala <CÓDIGO de una sala abierta>
+node dancesync-bot.mjs http   --url https://<api-gateway> --n 40     # límite HTTP del gateway: respuestas normales y luego 429
+```
+
 ## 7. Análisis de los resultados
 
 **El abusivo queda limitado muy por debajo de 1 s.** El peor caso de 50 conexiones fue 422 ms, incluida la ida y vuelta por el balanceador. El bloqueo llega cuando se acumulan más de 40 descartes, unos 700 ms después de empezar. Al terminar cada bloqueo de 30 s, el bot volvió a inundar y fue bloqueado otra vez: 50 conexiones aceptadas, 50 bloqueos.
@@ -291,7 +315,7 @@ Texto para la sección "Estado actual" de SEG-3 en el documento de escenarios:
 
 **Para el despliegue**
 
-- **`TRUSTED_PROXY_HOPS` en Azure.** Depende de cuántos proxies agregan `X-Forwarded-For` delante de cada servicio: el ingreso de Container Apps delante del gateway, y el ingreso más el gateway delante del Battle Service. Con un valor menor, todos los clientes compartirían la IP del proxy y un bloqueo los alcanzaría a todos; con uno mayor, un cliente podría falsificar su IP. Hay que confirmarlo mirando las cabeceras que llegan en el despliegue.
+- ~~**`TRUSTED_PROXY_HOPS` en Azure.**~~ Verificado el 17 de noviembre de 2026: `1` en el gateway (el ingreso de Container Apps) y `4` en `battle-service-a` y `battle-service-b` (ingreso del gateway, gateway, ingreso del balanceador y balanceador). La IP registrada en los incidentes y en el panel de administración es la del cliente. Si cambia la cadena de proxies, hay que volver a comprobarlo: con un valor menor, todos los clientes compartirían la IP de un proxy y un bloqueo los alcanzaría a todos; con uno mayor, un cliente podría falsificar su IP.
 - **`REDIS_URL` en el gateway** para que sus contadores se compartan si tiene más de una instancia.
 
 **Limitaciones conocidas**

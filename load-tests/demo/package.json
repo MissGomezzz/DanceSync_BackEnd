@@ -1,0 +1,9 @@
+{
+  "name": "dancesync-bot",
+  "private": true,
+  "type": "module",
+  "description": "Bot de demostración de DanceSync: reparto del balanceador (REN-1) y protección ante abuso (SEG-3/DoS).",
+  "dependencies": {
+    "socket.io-client": "^4.8.1"
+  }
+}

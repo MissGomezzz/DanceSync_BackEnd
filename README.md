@@ -181,6 +181,9 @@ The images do not run the tests: CI does, and only commits that passed CI are de
 
 `deploy-api-gateway.yml`, `deploy-battle-service.yml` and `deploy-user-service.yml` call the reusable `_deploy-service.yml`, which logs in to Azure with OIDC, builds the service image, pushes it to Azure Container Registry tagged with the commit SHA, and updates the Container App of the same name.
 
+- **battle-service goes to two apps.** Its image is deployed to `battle-service-a` and `battle-service-b`, the two replicas behind our load balancer (input `apps` of `_deploy-service.yml`; [ADR-10](docs/adr/ADR-10-balanceador-propio-azure.md)).
+- **The load balancer deploys on its own.** `deploy-load-balancer.yml` builds `load-balancer/azure/` (nginx with our configuration) into the `load-balancer` app only when that folder changes on `main`, or by hand: a new nginx revision drops the open WebSocket connections, which reconnect on their own.
+
 - **Gated by CI.** They trigger on `workflow_run` of "Backend CI" (`completed`, branch `main`) and deploy only when that run succeeded for a push to this repository. They check out and tag `github.event.workflow_run.head_sha`, the exact commit CI tested. `workflow_dispatch` remains for manual redeploys.
 - **All three on green CI.** `workflow_run` cannot filter by path, so every green CI run on `main` redeploys the three services; an unchanged image only creates a new Container App revision.
 - **One deploy at a time per service** (`concurrency: deploy-<service>`, never cancelling a deploy in progress), with least-privilege permissions (`contents: read`; `id-token: write` only for the OIDC login).
@@ -353,6 +356,7 @@ Quality scenario REN-1 is documented, with its results and evidence, in [docs/qu
 
 - **Several replicas.** With `REDIS_URL`, the room and word race state lives in Redis and the Socket.IO Redis adapter carries broadcasts between replicas, so any replica can serve any connection and no session affinity is needed (clients connect over WebSocket from the start and fall back to long-polling only when WebSocket is unavailable).
 - **Scale environment.** [`docker-compose.scale.yml`](docker-compose.scale.yml) starts Redis, two replicas with the same CPU and memory limit (`BATTLE_CPUS`, `BATTLE_MEMORY`), nginx as the load balancer on `http://localhost:8088` (`LB_REPLICAS=1` or `2` replicas receive traffic) and a fake Entra ID used only by the load tests.
+- **Our load balancer in Azure too.** `api-gateway` → `load-balancer` (nginx, `least_conn`, internal ingress) → `battle-service-a` | `battle-service-b`, one Container App per replica with internal TCP ingress, so the platform ingress never chooses the replica ([ADR-10](docs/adr/ADR-10-balanceador-propio-azure.md)). Verified in Azure: 12 / 11 WebSocket connections per replica, and the connections of a restarted replica recovered on the other in under 2.5 s.
 - **Load tests.** [`load-tests/`](load-tests/README.md) (Artillery) plays complete 7-player rooms and measures latency from the client: nominal load (140 users, 10 min) and a stress ramp to compare 1 and 2 replicas.
 - **Results.** 140 users with 2 replicas: chat p95 16.9 ms, vote p95 29.7 ms, 0 errors (target p95 <= 300 ms, < 1 % errors). Stress, 0.5 CPU per replica: 1 replica sustains 238 users and 2 replicas 427 (x1.79) at p95 <= 300 ms, with no duplicated or lost scores even when saturated.
 
@@ -366,7 +370,7 @@ Quality scenario DIS-1: one of two battle-service replicas stops abruptly with 2
 |---|---|
 | Active redundancy | Two or more replicas serve the same rooms at the same time; no replica owns a room. State lives in Redis, broadcasts cross replicas through the Socket.IO Redis adapter |
 | Health checks (ping/echo) | Liveness `GET /api/battles/health` (process up) and readiness `GET /api/battles/health/ready` (Redis answers a PING within 800 ms, otherwise `503`). Socket.IO heartbeat every 10 s with a 5 s timeout, so a client behind a dead or hung replica reconnects within 15 s |
-| Load balancer removes the failed replica | nginx locally (passive checks: one failed attempt takes a replica out for 10 s and the request is retried on the other one, `proxy_connect_timeout 2s`; upstream state shared by every worker through a `zone`); the Container Apps ingress with the readiness probe in Azure |
+| Load balancer removes the failed replica | nginx, locally and in Azure (passive checks: one failed attempt takes a replica out for 10 s and the request is retried on the other one, `proxy_connect_timeout 2s`; upstream state shared by every worker through a `zone`). In Azure the readiness and liveness probes of each replica's app restart a sick replica ([ADR-10](docs/adr/ADR-10-balanceador-propio-azure.md)) |
 | State resynchronization | Clients reconnect and repeat `room:join` (idempotent); the replica that receives them loads the room from Redis and resumes its word race timers |
 | Transactional outbox | Finished matches are stored in a Redis outbox before they are sent to users-service and removed only after a 2xx; every replica delivers what is pending |
 
@@ -422,14 +426,16 @@ The runs while the harness was being written found a real defect, now fixed (rep
 **Azure configuration** (resource group `rg-dancesync`, environment `cae-dancesync`)
 
 - [x] `redis` Container App (`redis:7-alpine` imported into the ACR): internal TCP ingress on 6379, password from a Container Apps secret, 0.25 vCPU / 0.5 GiB, 1 replica, no persistence. Azure Cache for Redis was left out for cost and provisioning time; the trade-off is a single Redis replica (see ADR-06)
-- [x] battle-service with `minReplicas: 2` / `maxReplicas: 2`; `REDIS_URL` (`redis://`, internal traffic only) as a secret, the same for every replica
+- [x] Two replicas behind our load balancer ([ADR-10](docs/adr/ADR-10-balanceador-propio-azure.md)): `battle-service-a` and `battle-service-b`, one replica each, internal TCP ingress on 3001 and 3002, `TRUSTED_PROXY_HOPS=4`; `load-balancer` (nginx, `load-balancer/azure/`) with internal HTTP ingress, and `BATTLE_SERVICE_URL=http://load-balancer` in the gateway. The former `battle-service` app (2 replicas behind the platform ingress) stays at zero as a fallback
+- [x] `REDIS_URL` (`redis://`, internal traffic only) as a secret, the same for every replica
+- [x] Failover verified in Azure: restarting `battle-service-a` with 10 connections open, its 4 connections recovered on `battle-service-b` in 0.6-2.4 s ([evidence](docs/quality/ren-1/evidence/azure/2026-11-17-caida-replica.txt))
 - [x] Liveness and readiness HTTP probes on `GET /api/battles/health` (period 5 s; liveness failure threshold 3, readiness 2) and a TCP startup probe
-- [ ] Readiness probe on `GET /api/battles/health/ready` once this branch is deployed (the deployed image does not have that endpoint yet)
-- [x] Ingress without session affinity, WebSocket transport
+- [x] Readiness probe on `GET /api/battles/health/ready`
+- [x] No session affinity, WebSocket transport
 - [x] `USERS_SERVICE_URL` pointing to users-service, reachable from battle-service for the outbox to drain
 - [x] `GUEST_TOKEN_SECRET` as a secret (`secretref`) in api-gateway and battle-service
 
-Turn the setup on before a demo and off afterwards with [`scripts/azure-availability.ps1`](scripts/azure-availability.ps1) (`up`, `down`, `status`; `-IncludePostgres` also starts or stops PostgreSQL). With `down`, battle-service and Redis scale to zero, so no compute is billed.
+Turn the setup on before a demo and off afterwards with [`scripts/azure-availability.ps1`](scripts/azure-availability.ps1) (`up`, `down`, `status`; `-IncludePostgres` also starts or stops PostgreSQL). With `down`, the battle replicas, the load balancer and Redis scale to zero, so no compute is billed.
 
 ## Observability (OBS-1)
 
@@ -477,6 +483,7 @@ Quality scenario SEG-3 is documented, with its tests and evidence, in [docs/qual
 - **Client address**: taken from `X-Forwarded-For` only for the proxies in `TRUSTED_PROXY_HOPS` (0 by default: the connection's address).
 - **Incident log**: one JSON line per incident (`abuse.rate_limited`, `abuse.blocked`, `abuse.refused`), in the same shape as the SEG-1 audit trail. If Redis fails, requests go through and the error is logged.
 - **Results** (140 users plus 5 clients sending 200 events per second): the abusive client is limited within 422 ms in the worst case and blocked in all 50 connections it opened; normal users had no errors, and their p95 stayed within the run-to-run noise of the measurement.
+- **In Azure**, through the gateway and our load balancer: a client flooding at 200 events per second was limited after 258 ms and blocked after 483 ms, its reconnections and a fresh guest token from the same address were refused, and the incidents carry the client's real address in the logs and in the admin console. Demo bot: [`load-tests/demo/dancesync-bot.mjs`](load-tests/demo/dancesync-bot.mjs).
 
 ## Authentication (SEG-1)
 

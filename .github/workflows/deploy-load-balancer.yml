@@ -1,0 +1,30 @@
+name: Deploy load-balancer
+
+# Balanceador propio (nginx, least_conn) delante de battle-service-a y battle-service-b en Azure
+# (REN-1 / DIS-1). Solo se despliega cuando cambia su configuración: un despliegue reinicia nginx y
+# corta las conexiones WebSocket abiertas (los clientes se reconectan solos).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "load-balancer/azure/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-load-balancer
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/_deploy-service.yml
+    with:
+      service: load-balancer
+      context: load-balancer/azure
+      ref: ${{ github.sha }}
+    secrets: inherit
