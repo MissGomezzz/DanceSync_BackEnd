@@ -1,0 +1,36 @@
+Ataque en Azure con el balanceador propio en el camino - 17 de noviembre de 2026
+Flujo: Cloud Shell (IP pública 128.24.198.36) -> api-gateway -> load-balancer (nginx) -> battle-service-a | battle-service-b
+Generador: load-tests/demo/dancesync-bot.mjs (un invitado que inunda el chat a 200 eventos por segundo).
+
+$ node dancesync-bot.mjs ataque --url $GW --sala 3WYMCM
+[   144 ms] token de invitado recibido (jugador guest-c93e9c8e-3db1-4f33-80dc-beee1b5fa6af)
+[   273 ms] conectado por WebSocket
+[   300 ms] entró a la sala
+[   301 ms] empieza la inundación a 200 eventos por segundo...
+[   558 ms] LIMITADO a los 258 ms de empezar: el servidor descarta los eventos que sobran (descartados: 1)
+[   784 ms] BLOQUEADO a los 483 ms de empezar, durante 30 s
+[   787 ms] el servidor cerró la conexión (io server disconnect)
+    Eventos intentados: 94 | rechazados con RATE_LIMITED: 42
+[  1924 ms] intento 1: RECHAZADO (BLOCKED, faltan 29 s)
+[  3034 ms] intento 2: RECHAZADO (BLOCKED, faltan 28 s)
+[  3190 ms]          con un token de invitado NUEVO desde la misma IP: también RECHAZADO (BLOCKED)
+[  4303 ms] intento 3: RECHAZADO (BLOCKED, faltan 27 s)
+...
+[  9859 ms] intento 8: RECHAZADO (BLOCKED, faltan 21 s)
+
+$ curl -s https://ifconfig.me
+128.24.198.36
+
+Registro de battle-service-a (az containerapp logs show), resumido:
+23:54:08.117Z abuse.rate_limited  playerId=guest-c93e9c8e-...  ip=128.24.198.36  socketEvent=chat:message dropped=1
+23:54:08.343Z abuse.blocked       playerId=guest-c93e9c8e-...  ip=128.24.198.36  blockedForMs=30000
+23:54:09.483Z abuse.refused       playerId=guest-c93e9c8e-...  ip=128.24.198.36  socketEvent=handshake blockedForMs=28862
+23:54:10.594Z abuse.refused       playerId=guest-c93e9c8e-...  ip=128.24.198.36  socketEvent=handshake blockedForMs=27749
+
+Panel de administración (SEG-2), capturas en azure-admin-alerts.png y azure-admin-audit-log.png:
+- Alerts: ClientBlocked "Bot atacante" (count=9: el bloqueo y 8 reconexiones rechazadas) y "Bot atacante 2" (count=1: token nuevo
+  desde la misma IP), ip=128.24.198.36.
+- Audit log: chat:message OK (ráfaga permitida) -> 23:54:08.117 Rate limited (dropped=1, un registro por incidente) -> algunos OK
+  (el balde se rellena a 20/s) -> 23:54:08.343 socket:blocked (blockedForMs=30000).
+
+La IP registrada coincide con la IP pública del cliente: TRUSTED_PROXY_HOPS=4 en las réplicas es correcto.

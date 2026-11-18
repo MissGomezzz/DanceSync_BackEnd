@@ -35,5 +35,7 @@ jobs:
     uses: ./.github/workflows/_deploy-service.yml
     with:
       service: battle-service
+      # Las dos réplicas detrás del balanceador nginx (load-balancer), una Container App cada una.
+      apps: battle-service-a battle-service-b
       ref: ${{ github.event.workflow_run.head_sha || github.sha }}
     secrets: inherit
